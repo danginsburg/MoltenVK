@@ -111,6 +111,12 @@ MVKImage* MVKCommandEncodingPool::getTransferMVKImage(MVKImageDescriptorData& im
     return mvkImg;
 }
 
+id<MTLComputePipelineState> MVKCommandEncodingPool::getCopyBufferBytesComputePipelineState() {
+    if (_mtlCopyBufferBytesComputePipelineState == nil) {
+        _mtlCopyBufferBytesComputePipelineState = _device->getCommandResourceFactory()->newCopyBytesMTLComputePipelineState();
+    }
+    return _mtlCopyBufferBytesComputePipelineState;
+}
 
 #pragma mark Construction
 
@@ -123,6 +129,7 @@ MVKCommandEncodingPool::MVKCommandEncodingPool(MVKDevice* device) : MVKBaseDevic
     _cmdClearDepthOnlyDepthStencilState = nil;
     _cmdClearStencilOnlyDepthStencilState = nil;
     _cmdClearDefaultDepthStencilState = nil;
+    _mtlCopyBufferBytesComputePipelineState = nil;
 
     initTextureDeviceMemory();
 }
@@ -139,7 +146,7 @@ void MVKCommandEncodingPool::initTextureDeviceMemory() {
 }
 
 MVKCommandEncodingPool::~MVKCommandEncodingPool() {
-    if (_transferImageMemory) { delete _transferImageMemory; }
+    if (_transferImageMemory) { _transferImageMemory->destroy(); }
 	destroyMetalResources();
 }
 
@@ -154,7 +161,7 @@ void MVKCommandEncodingPool::destroyMetalResources() {
     for (auto& pair : _mtlDepthStencilStates) { [pair.second release]; }
     _mtlDepthStencilStates.clear();
 
-    for (auto& pair : _transferImages) { delete pair.second; }
+    for (auto& pair : _transferImages) { pair.second->destroy(); }
     _transferImages.clear();
 
     [_cmdBlitImageLinearMTLSamplerState release];
@@ -174,5 +181,8 @@ void MVKCommandEncodingPool::destroyMetalResources() {
 
     [_cmdClearDefaultDepthStencilState release];
     _cmdClearDefaultDepthStencilState = nil;
+
+    [_mtlCopyBufferBytesComputePipelineState release];
+    _mtlCopyBufferBytesComputePipelineState = nil;
 }
 

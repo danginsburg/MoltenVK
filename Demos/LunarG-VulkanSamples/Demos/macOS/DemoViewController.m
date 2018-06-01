@@ -41,8 +41,8 @@
 	[super viewDidLoad];
 
 	self.view.wantsLayer = YES;		// Back the view with a layer created by the makeBackingLayer method.
-
-	demo_main(&demo, self.view);
+	const char* arg = "cube";
+	demo_main(&demo, self.view, 1, &arg);
 
 	CVDisplayLinkCreateWithActiveCGDisplays(&_displayLink);
 	CVDisplayLinkSetOutputCallback(_displayLink, &DisplayLinkCallback, &demo);
@@ -59,7 +59,7 @@ static CVReturn DisplayLinkCallback(CVDisplayLinkRef displayLink,
 									CVOptionFlags flagsIn,
 									CVOptionFlags* flagsOut,
 									void* target) {
-	demo_update_and_draw((struct demo*)target);
+	demo_draw((struct demo*)target);
 	return kCVReturnSuccess;
 }
 

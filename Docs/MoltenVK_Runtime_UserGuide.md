@@ -19,8 +19,8 @@ Table of Contents
 
 - [About This Document](#about_this)
 - [About **MoltenVK**](#about_moltenvk)
-- [Running the **MoltenVK** Demo Applications](#demos)
 - [Installing **MoltenVK** in Your *Vulkan* Application](#install)
+	- [Build and Runtime Requirements](#requirements)
 	- [Install as Static Library Framework](#install_static_lib)
 	- [Install as Dynamic Library](#install_dynamic_lib)
 - [Interacting with the **MoltenVK** Runtime](#interaction)
@@ -33,7 +33,6 @@ Table of Contents
 	- [Xcode Configuration](#xcode_config)
 	- [Metal System Trace Tool](#trace_tool)
 - [Known **MoltenVK** Limitations](#limitations)
-- [Third-Party Credits](#credits)
 
 
 
@@ -45,7 +44,7 @@ This document describes how to integrate the **MoltenVK** runtime distribution p
 or application, once **MoltenVK** has been built into a framework or library for *iOS* or *macOS*.
 
 To learn how to use the **MoltenVK** open-source repository to build a **MoltenVK** runtime 
-distribution package, see the main [**README**](../README.md) document in the `MoltenVK` repository.
+distribution package, see the main [`README.md`](../README.md) document in the `MoltenVK` repository.
 
 
 
@@ -53,7 +52,7 @@ distribution package, see the main [**README**](../README.md) document in the `M
 About **MoltenVK**
 ------------------
 
-**MoltenVK** is an implementation of the [*Vulkan*](https://www.khronos.org/vulkan) 
+**MoltenVK** is an implementation of the [*Vulkan 1.0*](https://www.khronos.org/vulkan) 
 graphics and compute API, that runs on Apple's [*Metal*](https://developer.apple.com/metal) 
 graphics and compute framework on both *iOS* and *macOS*.
 
@@ -69,38 +68,28 @@ using the **Runtime Shader Conversion** feature of **MoltenVK**, or at developme
 package.
 
 
-
-<a name="demos"></a>
-Running the **MoltenVK** Demo Applications
-------------------------------------------
-
-You can explore how **MoltenVK** provides *Vulkan* support on *iOS* and *macOS* by investigating
-and running the demo applications that are supported with this **MoltenVK** distribution package. 
-
-The **MoltenVK** demo apps are located in the `Demos` folder within the **MoltenVK**
-distribution package. Each demo app is available as an *Xcode* project.
-
-To review and run many of the available demo apps, open the `Demos/Demos.xcworkspace` workspace 
-in *Xcode*.
-
-Please read the [Demos/README_MoltenVK_Demos.md](Demos/README_MoltenVK_Demos.md) document for a 
-description of each demo app, and instructions on downloading and running the demo apps. 
-Many of the **MoltenVK** demos make use of third-party demo examples, which must be downloaded 
-from an external repository. Several of the demo apps allow you to explore a variety of *Vulkan* 
-features by modifying *Xcode* build settings. All of this is explained in the 
-[README_MoltenVK_Demos.md](Demos/README_MoltenVK_Demos.md) document.
-
-
 <a name="install"></a>
 Installing **MoltenVK** in Your *Vulkan* Application
 ----------------------------------------------------
 
->***Note:*** **MoltenVK** can be run on *iOS 9* and *macOS 11.0* devices, 
- but it does reference advanced OS frameworks during building. *Xcode 9* 
- or above is required to build and link **MoltenVK** projects.
+<a name="requirements"></a>
+### Build and Runtime Requirements
+
+At development time, **MoltenVK** references advanced OS frameworks during building.
+ 
+- *Xcode 9* or above is required to build and link **MoltenVK** projects.
+
+Once built, **MoltenVK** can be run on *iOS* or *macOS* devices that support *Metal*.
+
+- **MoltenVK** requires at least *macOS 10.11* or  *iOS 9*.
+- Information on *macOS* devices that are compatible with *Metal* can be found in 
+  [this article](http://www.idownloadblog.com/2015/06/22/how-to-find-mac-el-capitan-metal-compatible).
+- Information on compatible *iOS* devices that are compatible with *Metal* can be found in 
+  [this article](https://developer.apple.com/library/content/documentation/DeviceInformation/Reference/iOSDeviceCompatibility/HardwareGPUInformation/HardwareGPUInformation.html).
+
 
 <a name="install_static_lib"></a>
-###Install as Static Library Framework
+### Install as Static Library Framework
 
 Installation of **MoltenVK** is straightforward and easy!
 
@@ -157,7 +146,7 @@ the *Metal* environment.
 
 
 <a name="install_dynamic_lib"></a>
-###Install as Dynamic Library
+### Install as Dynamic Library
 
 For some applications, you may prefer to install **MoltenVK** as a dynamic library.
 This is only recommended for developers who are used to working with dynamic libraries,
@@ -174,7 +163,7 @@ follow these instructions:
 2. On the *Build Settings* tab:
      1. In the **Header Search Paths** (aka `HEADER_SEARCH_PATHS`) setting, add an entry 
         that points to the `MoltenVK/include` folder, found in the **MoltenVK** distribution package.
-     2. In the **Library Search Paths** (aka `HEADER_SEARCH_PATHS`) setting, add an entry 
+     2. In the **Library Search Paths** (aka `LIBRARY_SEARCH_PATHS`) setting, add an entry 
         that points to either the `MoltenVK/iOS` or `MoltenVK/macOS` folder, found in the
         **MoltenVK** distribution package.
      3. In the **Runpath Search Paths** (aka `LD_RUNPATH_SEARCH_PATHS`) setting, add a path 
@@ -252,15 +241,9 @@ You can enable each of these extensions by defining the `VK_USE_PLATFORM_IOS_MVK
 `VK_USE_PLATFORM_MACOS_MVK` guard macro in your compiler build settings. See the description
 of the `mvk_vulkan.h` file below for a convenient way to enable these extensions automatically.
 
-The *Vulkan* API, including the `VK_MVK_ios_surface` and `VK_MVK_macos_surface` surface 
-extensions, and other *Vulkan* extensions supported by **MoltenVK** (except `VK_MVK_moltenvk`), 
-is described in the 
-[*Vulkan 1.0 Spec with MoltenVK Extensions*](Vulkan_1.0_Spec_with_MoltenVK_Extensions.html) 
-document found in the `MoltenVK/Vulkan` folder of the **MoltenVK** distribution.
-
 
 <a name="moltenvk_extension"></a>
-###MoltenVK Extension
+### MoltenVK Extension
 
 The `VK_MVK_moltenvk` *Vulkan* extension provides functionality beyond the standard *Vulkan*
 API, to support configuration options, license registration, and behaviour that is specific 
@@ -334,7 +317,7 @@ shader source code for the odd *SPIR-V* shader that proves problematic for runti
 
 
 <a name="shader_converter_tool"></a>
-###MoltenVKShaderConverter Shader Converter Tool
+### MoltenVKShaderConverter Shader Converter Tool
 
 The **MoltenVK** distribution package includes the `MoltenVKShaderConverter` command line tool, 
 which allows you to convert your *SPIR-V* shader source code to *MSL* at development time, and 
@@ -358,8 +341,7 @@ line with no arguments.
 
 
 <a name="spv_vs_msl"></a>
-###Troubleshooting Shader Conversion
----------------------------------
+### Troubleshooting Shader Conversion
 
 The shader converter technology in **MoltenVK** is quite robust, and most *SPIR-V* shaders 
 can be converted to *MSL* without any problems. In the case where a conversion issue arises, 
@@ -404,17 +386,39 @@ This section discusses various options for improving performance when using **Mo
 
 
 <a name="shader_load_time"></a>
-###Shader Loading Time
+### Shader Loading Time
 
-*Metal* supports pre-compiled shaders, which can improve shader loading and set-up performance,
-allowing you to reduce your scene loading time. See the [*Metal Shading Language* Shaders](#shaders) 
-and [MoltenVKShaderConverter Shader Converter Tool](#shader_converter_tool) sections above for 
-more information about how to use the `MoltenVKShaderConverter` tool to create and load pre-compiled 
-*Metal* shaders into **MoltenVK**.
+A number of steps is require to load and compile *SPIR-V* shaders into a form that *Metal* can use. 
+Although the overall process is fast, the slowest step involves converting shaders from *SPIR-V* to
+*MSL* source code format.
+
+If you have a lot of shaders, you can dramatically improve shader loading time by using the standard
+*Vulkan pipeline cache* feature, to serialize shaders and store them in *MSL* form offline.
+Loading *MSL* shaders via the pipeline cache serializing mechanism can be significantly faster than 
+converting from *SPIR-V* to *MSL* each time.
+
+In *Vulkan*, pipeline cache serialization for offline storage is available through the 
+`vkGetPipelineCacheData()` and `vkCreatePipelineCache()` functions. Loading the pipeline cache 
+from offline storage at app start-up time can dramatically improve both shader loading performance, 
+and performance glitches and hiccups during runtime code if shader loading is performed then.
+
+When using pipeline caching, nothing changes about how you load *SPIR-V* shader code. **MoltenVK** 
+automatically detects that the *SPIR-V* was previously converted to *MSL*, and stored offline via 
+the *Vulkan* pipeline cache serialization mechanism, and does not invoke the relatively expensive
+step of converting the *SPIR-V* to *MSL* again.
+
+As a second shader loading performance option, *Metal* also supports pre-compiled shaders, which 
+can improve shader loading and set-up performance, allowing you to reduce your scene loading time. 
+See the [*Metal Shading Language* Shaders](#shaders) and 
+[MoltenVKShaderConverter Shader Converter Tool](#shader_converter_tool) sections above for more 
+information about how to use the `MoltenVKShaderConverter` tool to create and load pre-compiled 
+*Metal* shaders into **MoltenVK**. This behaviour is not standard *Vulkan* behaviour, and does not
+improve performance significantly. Your first choice should be to use offline storage of pipeline
+cache contents as described in the previous paragraphs.
 
 
 <a name="xcode_config"></a>
-###Xcode Configuration
+### Xcode Configuration
 
 When a *Metal* app is running from *Xcode*, the default ***Scheme*** settings reduce performance. 
 Be sure to follow the instructions for configuring your application's ***Scheme*** within *Xcode*,
@@ -422,7 +426,7 @@ found in the  in the [installation](#install) section above.
 
 
 <a name="trace_tool"></a>
-###Metal System Trace Tool
+### Metal System Trace Tool
 
 To help you get the best performance from your graphics app, the *Xcode Instruments* profiling tool 
 includes the *Metal System Trace* template. This template can be used to provide detailed tracing of the
@@ -437,10 +441,10 @@ Known **MoltenVK** Limitations
 
 This section documents the known limitations in this version of **MoltenVK**.
 
-- **MoltenVK** is a Layer-0 driver implementation of *Vulkan*, and currently does not
+- **MoltenVK** is a Layer-0 driver implementation of *Vulkan 1.0*, and currently does not
   support the loading of higher level *Vulkan Layers*.
 
-The following *Vulkan* features have not been implemented in this version of **MoltenVK**:
+The following *Vulkan 1.0* features have not been implemented in this version of **MoltenVK**:
 
 - Tessellation and Geometry shader stages.
 
@@ -469,22 +473,3 @@ The following *Vulkan* features have not been implemented in this version of **M
 	- `VK_FORMAT_R8_UNORM`: `VkComponentMapping.r` = `VK_COMPONENT_SWIZZLE_R`
 	- `VK_FORMAT_R8G8B8A8_UNORM` <->	`VK_FORMAT_B8G8R8A8_UNORM`
 	- `VK_FORMAT_R8G8B8A8_SRGB` <->	`VK_FORMAT_B8G8R8A8_SRGB`
-
-
-
-
-<a name="credits"></a>
-Third-Party Credits
--------------------
-
-**MoltenVK** uses technology from the following open-source frameworks:
-
-- [*Vulkan-Hpp*](https://github.com/KhronosGroup/Vulkan-Hpp)
-- [*Vulkan-Docs*](https://github.com/KhronosGroup/Vulkan-Docs)
-- [*tinyxml2*](https://github.com/leethomason/tinyxml2)
-
-**MoltenVKShaderConverter** uses technology from the following open-source frameworks:
-
-- [*SPIRV-Cross*](https://github.com/KhronosGroup/SPIRV-Cross)
-- [*SPIRV-Tools*](https://github.com/KhronosGroup/SPIRV-Tools)
-- [*glslang*](https://github.com/KhronosGroup/glslang)

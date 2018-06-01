@@ -41,8 +41,9 @@
 
 	self.view.contentScaleFactor = UIScreen.mainScreen.nativeScale;
 
-	demo_main(&demo, self.view);
-	demo_update_and_draw(&demo);
+	const char* arg = "cube";
+	demo_main(&demo, self.view, 1, &arg);
+	demo_draw(&demo);
 
 	uint32_t fps = 60;
 	_displayLink = [CADisplayLink displayLinkWithTarget: self selector: @selector(renderLoop)];
@@ -51,7 +52,7 @@
 }
 
 -(void) renderLoop {
-	demo_update_and_draw(&demo);
+	demo_draw(&demo);
 }
 
 @end

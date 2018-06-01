@@ -18,8 +18,10 @@
 
 #include "MVKCommandResourceFactory.h"
 #include "MVKCommandPipelineStateFactoryShaderSource.h"
+#include "MVKPipeline.h"
 #include "MVKFoundation.h"
 #include "mvk_datatypes.h"
+#include "NSString+MoltenVK.h"
 #include "MVKLogging.h"
 
 using namespace std;
@@ -30,19 +32,17 @@ using namespace std;
 
 id<MTLRenderPipelineState> MVKCommandResourceFactory::newCmdBlitImageMTLRenderPipelineState(MTLPixelFormat mtlPixFmt) {
     bool isDepthFormat = mvkMTLPixelFormatIsDepthFormat(mtlPixFmt);
-    string fragFuncSfx = getFragFunctionSuffix(mtlPixFmt);
 
     MTLRenderPipelineDescriptor* plDesc = [[[MTLRenderPipelineDescriptor alloc] init] autorelease];
-    plDesc.label = [NSString stringWithFormat: @"CmdBlitImage%s-%lu", fragFuncSfx.data(), (unsigned long)mtlPixFmt];
+    plDesc.label = [NSString stringWithFormat: @"CmdBlitImage"];
 
     plDesc.vertexFunction = getFunctionNamed(isDepthFormat ? "vtxCmdBlitImageD" : "vtxCmdBlitImage");
-    plDesc.fragmentFunction = getFunctionNamed((string("fragCmdBlitImage") + fragFuncSfx).data());
+    plDesc.fragmentFunction = getBlitFragFunction(mtlPixFmt);
 
-    if ( isDepthFormat ) {
+    if (isDepthFormat) {
         plDesc.depthAttachmentPixelFormat = mtlPixFmt;
     } else {
-        MTLRenderPipelineColorAttachmentDescriptor* colorDesc = plDesc.colorAttachments[0];
-        colorDesc.pixelFormat = mtlPixFmt;
+		plDesc.colorAttachments[0].pixelFormat = mtlPixFmt;
     }
 
     MTLVertexDescriptor* vtxDesc = plDesc.vertexDescriptor;
@@ -91,12 +91,11 @@ id<MTLSamplerState> MVKCommandResourceFactory::newCmdBlitImageMTLSamplerState(MT
 }
 
 id<MTLRenderPipelineState> MVKCommandResourceFactory::newCmdClearMTLRenderPipelineState(MVKRPSKeyClearAtt& attKey) {
-    string fragFuncSfx = getFragFunctionSuffix(attKey);
-
     MTLRenderPipelineDescriptor* plDesc = [[[MTLRenderPipelineDescriptor alloc] init] autorelease];
-    plDesc.label = [NSString stringWithFormat: @"CmdClearAttachments%s", fragFuncSfx.data()];
+    plDesc.label = [NSString stringWithFormat: @"CmdClearAttachments"];
     plDesc.vertexFunction = getFunctionNamed("vtxCmdClearAttachments");
-    plDesc.fragmentFunction = getFunctionNamed((string("fragCmdClearAttachments") + fragFuncSfx).data());
+    plDesc.fragmentFunction = getClearFragFunction(attKey);
+	plDesc.sampleCount = attKey.mtlSampleCount;
 
     for (uint32_t caIdx = 0; caIdx < kMVKAttachmentFormatDepthStencilIndex; caIdx++) {
         MTLRenderPipelineColorAttachmentDescriptor* colorDesc = plDesc.colorAttachments[caIdx];
@@ -130,6 +129,106 @@ id<MTLRenderPipelineState> MVKCommandResourceFactory::newCmdClearMTLRenderPipeli
     vbDesc.stride = vtxStride;
 
     return newMTLRenderPipelineState(plDesc);
+}
+
+id<MTLFunction> MVKCommandResourceFactory::getBlitFragFunction(MTLPixelFormat mtlPixFmt) {
+	id<MTLFunction> mtlFunc = nil;
+	bool isDepthFormat = mvkMTLPixelFormatIsDepthFormat(mtlPixFmt);
+	NSString* typeStr = getMTLFormatTypeString(mtlPixFmt);
+
+	@autoreleasepool {
+		NSMutableString* msl = [NSMutableString stringWithCapacity: (2 * KIBI) ];
+		[msl appendLineMVK: @"#include <metal_stdlib>"];
+		[msl appendLineMVK: @"using namespace metal;"];
+		[msl appendLineMVK];
+		[msl appendLineMVK: @"typedef struct {"];
+		[msl appendLineMVK: @"    float4 gl_Position [[position]];"];
+		[msl appendLineMVK: @"    float2 v_texCoord;"];
+		[msl appendLineMVK: @"} VaryingsPosTex;"];
+		[msl appendLineMVK];
+
+		NSString* funcName = @"fragBlit";
+		[msl appendFormat: @"fragment %@4 %@(VaryingsPosTex varyings [[stage_in]],", typeStr, funcName];
+		[msl appendLineMVK];
+		if (isDepthFormat) {
+			[msl appendLineMVK: @"                         depth2d<float> texture [[texture(0)]],"];
+		} else {
+			[msl appendFormat: @"                         texture2d<%@> texture [[texture(0)]],", typeStr];
+			[msl appendLineMVK];
+		}
+		[msl appendLineMVK: @"                         sampler sampler [[ sampler(0) ]]) {"];
+		if (isDepthFormat) {
+			[msl appendFormat: @"    return %@4(texture.sample(sampler, varyings.v_texCoord));", typeStr];
+			[msl appendLineMVK];
+		} else {
+			[msl appendLineMVK: @"    return texture.sample(sampler, varyings.v_texCoord);"];
+		}
+		[msl appendLineMVK: @"}"];
+
+		mtlFunc = newMTLFunction(msl, funcName);
+//		MVKLogDebug("\n%s", msl.UTF8String);
+	}
+	return [mtlFunc autorelease];
+}
+
+id<MTLFunction> MVKCommandResourceFactory::getClearFragFunction(MVKRPSKeyClearAtt& attKey) {
+	id<MTLFunction> mtlFunc = nil;
+	@autoreleasepool {
+		NSMutableString* msl = [NSMutableString stringWithCapacity: (2 * KIBI) ];
+		[msl appendLineMVK: @"#include <metal_stdlib>"];
+		[msl appendLineMVK: @"using namespace metal;"];
+		[msl appendLineMVK];
+		[msl appendLineMVK: @"typedef struct {"];
+		[msl appendLineMVK: @"    float4 gl_Position [[position]];"];
+		[msl appendLineMVK: @"} VaryingsPos;"];
+		[msl appendLineMVK];
+		[msl appendLineMVK: @"typedef struct {"];
+		[msl appendLineMVK: @"    float4 colors[9];"];
+		[msl appendLineMVK: @"} ClearColorsIn;"];
+		[msl appendLineMVK];
+		[msl appendLineMVK: @"typedef struct {"];
+		for (uint32_t caIdx = 0; caIdx < kMVKAttachmentFormatDepthStencilIndex; caIdx++) {
+			if (attKey.isEnabled(caIdx)) {
+				NSString* typeStr = getMTLFormatTypeString((MTLPixelFormat)attKey.attachmentMTLPixelFormats[caIdx]);
+				[msl appendFormat: @"    %@4 color%u [[color(%u)]];", typeStr, caIdx, caIdx];
+				[msl appendLineMVK];
+			}
+		}
+		[msl appendLineMVK: @"} ClearColorsOut;"];
+		[msl appendLineMVK];
+
+		NSString* funcName = @"fragClear";
+		[msl appendFormat: @"fragment ClearColorsOut %@(VaryingsPos varyings [[stage_in]], constant ClearColorsIn& ccIn [[buffer(0)]]) {", funcName];
+		[msl appendLineMVK];
+		[msl appendLineMVK: @"    ClearColorsOut ccOut;"];
+		for (uint32_t caIdx = 0; caIdx < kMVKAttachmentFormatDepthStencilIndex; caIdx++) {
+			if (attKey.isEnabled(caIdx)) {
+				NSString* typeStr = getMTLFormatTypeString((MTLPixelFormat)attKey.attachmentMTLPixelFormats[caIdx]);
+				[msl appendFormat: @"    ccOut.color%u = %@4(ccIn.colors[%u]);", caIdx, typeStr, caIdx];
+				[msl appendLineMVK];
+			}
+		}
+		[msl appendLineMVK: @"    return ccOut;"];
+		[msl appendLineMVK: @"}"];
+
+		mtlFunc = newMTLFunction(msl, funcName);
+//		MVKLogDebug("\n%s", msl.UTF8String);
+	}
+	return [mtlFunc autorelease];
+}
+
+NSString* MVKCommandResourceFactory::getMTLFormatTypeString(MTLPixelFormat mtlPixFmt) {
+	switch (mvkFormatTypeFromMTLPixelFormat(mtlPixFmt)) {
+		case kMVKFormatColorHalf:		return @"half";
+		case kMVKFormatColorFloat:		return @"float";
+		case kMVKFormatColorInt8:		return @"char";
+		case kMVKFormatColorUInt8:		return @"uchar";
+		case kMVKFormatColorInt16:		return @"short";
+		case kMVKFormatColorUInt16:		return @"ushort";
+		case kMVKFormatColorInt32:		return @"int";
+		case kMVKFormatColorUInt32:		return @"uint";
+		default:						return @"unexpected_type";
+	}
 }
 
 id<MTLDepthStencilState> MVKCommandResourceFactory::newMTLDepthStencilState(bool useDepth, bool useStencil) {
@@ -199,36 +298,48 @@ MVKImage* MVKCommandResourceFactory::newMVKImage(MVKImageDescriptorData& imgData
     return _device->createImage(&createInfo, nullptr);
 }
 
-string MVKCommandResourceFactory::getFragFunctionSuffix(MTLPixelFormat mtlPixFmt) {
-    switch (mvkFormatTypeFromMTLPixelFormat(mtlPixFmt)) {
-        case kMVKFormatDepthStencil:	return "DS";
-        case kMVKFormatColorUInt:		return "U";
-        case kMVKFormatColorInt:		return "I";
-        default:						return "F";
-    }
-}
-
-string MVKCommandResourceFactory::getFragFunctionSuffix(MVKRPSKeyClearAtt& attKey) {
-    string suffix;
-    if (attKey.isEnabledOnly(0)) { suffix += "0"; }
-    suffix += getFragFunctionSuffix((MTLPixelFormat)attKey.attachmentMTLPixelFormats[0]);
-    return suffix;
-}
-
 id<MTLFunction> MVKCommandResourceFactory::getFunctionNamed(const char* funcName) {
-    NSTimeInterval startTime = _device->getPerformanceTimestamp();
+    uint64_t startTime = _device->getPerformanceTimestamp();
     id<MTLFunction> mtlFunc = [[_mtlLibrary newFunctionWithName: @(funcName)] autorelease];
-    _device->addShaderCompilationEventPerformance(_device->_shaderCompilationPerformance.functionRetrieval, startTime);
+    _device->addActivityPerformance(_device->_performanceStatistics.shaderCompilation.functionRetrieval, startTime);
     return mtlFunc;
 }
 
+id<MTLFunction> MVKCommandResourceFactory::newMTLFunction(NSString* mslSrcCode, NSString* funcName) {
+	uint64_t startTime = _device->getPerformanceTimestamp();
+	MTLCompileOptions* shdrOpts = [[MTLCompileOptions new] autorelease];
+	NSError* err = nil;
+	id<MTLLibrary> mtlLib = [[getMTLDevice() newLibraryWithSource: mslSrcCode
+														  options: shdrOpts
+															error: &err] autorelease];
+	_device->addActivityPerformance(_device->_performanceStatistics.shaderCompilation.mslCompile, startTime);
+	if (err) {
+		mvkNotifyErrorWithText(VK_ERROR_INITIALIZATION_FAILED, "Could not compile support shader from MSL source:\n%s\n %s (code %li) %s", mslSrcCode.UTF8String, err.localizedDescription.UTF8String, (long)err.code, err.localizedFailureReason.UTF8String);
+		return nil;
+	}
+
+	startTime = _device->getPerformanceTimestamp();
+	id<MTLFunction> mtlFunc = [mtlLib newFunctionWithName: funcName];
+	_device->addActivityPerformance(_device->_performanceStatistics.shaderCompilation.functionRetrieval, startTime);
+	return mtlFunc;
+}
+
 id<MTLRenderPipelineState> MVKCommandResourceFactory::newMTLRenderPipelineState(MTLRenderPipelineDescriptor* plDesc) {
-    NSTimeInterval startTime = _device->getPerformanceTimestamp();
-    NSError* err = nil;
-    id<MTLRenderPipelineState> rps = [getMTLDevice() newRenderPipelineStateWithDescriptor: plDesc error: &err];    // retained
-    MVKAssert( !err, "Could not create %s pipeline state: %s (code %li) %s", plDesc.label.UTF8String, err.localizedDescription.UTF8String, (long)err.code, err.localizedFailureReason.UTF8String);
-    _device->addShaderCompilationEventPerformance(_device->_shaderCompilationPerformance.pipelineCompile, startTime);
+	MVKRenderPipelineCompiler* plc = new MVKRenderPipelineCompiler(_device);
+	id<MTLRenderPipelineState> rps = plc->newMTLRenderPipelineState(plDesc);	// retained
+	plc->destroy();
     return rps;
+}
+
+id<MTLComputePipelineState> MVKCommandResourceFactory::newCopyBytesMTLComputePipelineState() {
+    MTLComputePipelineDescriptor* plDesc = [[[MTLComputePipelineDescriptor alloc] init] autorelease];
+    plDesc.computeFunction = getFunctionNamed("compCopyBufferBytes");
+    plDesc.buffers[0].mutability = MTLMutabilityMutable;
+    plDesc.buffers[1].mutability = MTLMutabilityMutable;
+    NSError* err = nil;
+    id<MTLComputePipelineState> computePipelineState = [getMTLDevice() newComputePipelineStateWithDescriptor:plDesc options:MTLPipelineOptionNone reflection:nil error:&err];
+    MVKAssert( !err, "Could not create %s pipeline state: %s (code %li) %s", plDesc.label.UTF8String, err.localizedDescription.UTF8String, (long)err.code, err.localizedFailureReason.UTF8String);
+    return computePipelineState;
 }
 
 #pragma mark Construction
@@ -239,7 +350,7 @@ MVKCommandResourceFactory::MVKCommandResourceFactory(MVKDevice* device) : MVKBas
 
 /** Initializes the Metal shaders used for command activity. */
 void MVKCommandResourceFactory::initMTLLibrary() {
-    NSTimeInterval startTime = _device->getPerformanceTimestamp();
+    uint64_t startTime = _device->getPerformanceTimestamp();
     @autoreleasepool {
         MTLCompileOptions* shdrOpts = [[MTLCompileOptions new] autorelease];
         NSError* err = nil;
@@ -248,7 +359,7 @@ void MVKCommandResourceFactory::initMTLLibrary() {
                                                      error: &err];    // retained
         MVKAssert( !err, "Could not compile command shaders %s (code %li) %s", err.localizedDescription.UTF8String, (long)err.code, err.localizedFailureReason.UTF8String);
     }
-    _device->addShaderCompilationEventPerformance(_device->_shaderCompilationPerformance.mslCompile, startTime);
+    _device->addActivityPerformance(_device->_performanceStatistics.shaderCompilation.mslCompile, startTime);
 }
 
 MVKCommandResourceFactory::~MVKCommandResourceFactory() {

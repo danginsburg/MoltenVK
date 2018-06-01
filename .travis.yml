@@ -1,0 +1,20 @@
+language: objective-c 
+
+# macOS and Xcode Version
+# Xcode 9.2 running on macOS 10.12
+osx_image: xcode9.2
+
+# Build dependencies
+install:
+  - brew install python3
+  - ./fetchDependencies
+
+# Cache built deps
+cache:
+  directories:
+    - External
+
+script:
+  - xcodebuild -scheme "MoltenVK (Debug)"
+  - xcodebuild -workspace Demos/Demos.xcworkspace -scheme "API-Samples-macOS"
+

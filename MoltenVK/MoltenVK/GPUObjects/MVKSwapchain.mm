@@ -26,6 +26,7 @@
 #include "MVKWatermarkShaderSource.h"
 #include "mvk_datatypes.h"
 #include "MVKLogging.h"
+#import "CAMetalLayer+MoltenVK.h"
 
 using namespace std;
 
@@ -65,38 +66,19 @@ VkResult MVKSwapchain::acquireNextImageKHR(uint64_t timeout,
                                            uint32_t* pImageIndex) {
     // Find the image that has the smallest availability measure
     uint32_t minWaitIndex = 0;
-    MVKSwapchainImageAvailability minAvailability = { .acquisitionID = numeric_limits<uint64_t>::max(), .waitCount = numeric_limits<uint32_t>::max(), .isAvailable = false };
+    MVKSwapchainImageAvailability minAvailability = { .acquisitionID = kMVKUndefinedLargeUInt64,
+													  .waitCount = kMVKUndefinedLargeUInt32,
+													  .isAvailable = false };
     for (MVKSwapchainImage* mvkSCImg : _surfaceImages) {
         const MVKSwapchainImageAvailability* currAvailability = mvkSCImg->getAvailability();
-//        MVKLogDebug("Comparing availability (isAvailable: %d waitCount: %d, acquisitionID: %d) to (isAvailable: %d waitCount: %d, acquisitionID: %d)",
-//                    currAvailability->isAvailable, currAvailability->waitCount, currAvailability->acquisitionID,
-//                    minAvailability.isAvailable, minAvailability.waitCount, minAvailability.acquisitionID);
         if (*currAvailability < minAvailability) {
             minAvailability = *currAvailability;
             minWaitIndex = mvkSCImg->getSwapchainIndex();
-//            MVKLogDebug("Is smaller! Index: %d", minWaitIndex);
         }
     }
-//    MVKLogDebug("Selected MVKSwapchainImage %p, index: %d to trigger semaphore %p and fence %p", _surfaceImages[minWaitIndex], minWaitIndex, semaphore, fence);
 
     *pImageIndex = minWaitIndex;	// Return the index of the image with the shortest wait
-
-    if (semaphore || fence) {
-        MVKSemaphore* mvkSem4 = (MVKSemaphore*)semaphore;
-        MVKFence* mvkFence = (MVKFence*)fence;
-        _surfaceImages[minWaitIndex]->signalWhenAvailable(mvkSem4, mvkFence);
-    } else {
-        // Interpret a NULL semaphore to mean that this function itself should block
-        // until the image is available. Create temp semaphore and wait on it here.
-        VkSemaphoreCreateInfo semaphoreCreateInfo = {
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-            .pNext = NULL,
-        };
-        MVKSemaphore mvkSem4(_device, &semaphoreCreateInfo);
-        _surfaceImages[minWaitIndex]->signalWhenAvailable(&mvkSem4, NULL);
-        if ( !mvkSem4.wait(timeout) ) { return VK_TIMEOUT; }
-    }
-    
+    _surfaceImages[minWaitIndex]->signalWhenAvailable((MVKSemaphore*)semaphore, (MVKFence*)fence);
     return getHasSurfaceSizeChanged() ? VK_SUBOPTIMAL_KHR : VK_SUCCESS;
 }
 
@@ -137,8 +119,8 @@ void MVKSwapchain::renderWatermark(id<MTLTexture> mtlTexture, id<MTLCommandBuffe
         _licenseWatermark->render(mtlTexture, mtlCmdBuff, _performanceStatistics.lastFrameInterval);
     } else {
         if (_licenseWatermark) {
-            delete _licenseWatermark;
-            _licenseWatermark = NULL;
+            _licenseWatermark->destroy();
+            _licenseWatermark = nullptr;
         }
     }
 }
@@ -147,27 +129,32 @@ void MVKSwapchain::renderWatermark(id<MTLTexture> mtlTexture, id<MTLCommandBuffe
 void MVKSwapchain::markFrameInterval() {
     if ( !(_device->_mvkConfig.performanceTracking || _licenseWatermark) ) { return; }
 
-    NSTimeInterval prevFrameTime = _lastFrameTime;
-    _lastFrameTime = [NSDate timeIntervalSinceReferenceDate];
-    _performanceStatistics.lastFrameInterval = _lastFrameTime - prevFrameTime;
+    uint64_t prevFrameTime = _lastFrameTime;
+    _lastFrameTime = mvkGetTimestamp();
+    _performanceStatistics.lastFrameInterval = mvkGetElapsedMilliseconds(prevFrameTime, _lastFrameTime);
 
     // Low pass filter.
     // y[i] := α * x[i] + (1-α) * y[i-1]  OR
     // y[i] := y[i-1] + α * (x[i] - y[i-1])
     _performanceStatistics.averageFrameInterval += _averageFrameIntervalFilterAlpha * (_performanceStatistics.lastFrameInterval - _performanceStatistics.averageFrameInterval);
-    _performanceStatistics.averageFramesPerSecond = 1.0 / _performanceStatistics.averageFrameInterval;
+    _performanceStatistics.averageFramesPerSecond = 1000.0 / _performanceStatistics.averageFrameInterval;
+
+// Uncomment for per-frame logging.
+//	MVKLogDebug("Frame interval: %.2f ms. Avg frame interval: %.2f ms. Frame number: %d.",
+//				_performanceStatistics.lastFrameInterval,
+//				_performanceStatistics.averageFrameInterval,
+//				_currentPerfLogFrameCount + 1);
 
     uint32_t perfLogCntLimit = _device->_mvkConfig.performanceLoggingFrameCount;
-    if (perfLogCntLimit > 0) {
-        _currentPerfLogFrameCount++;
-        if (_currentPerfLogFrameCount >= perfLogCntLimit) {
-            MVKLogInfo("Frame interval: %.3f. Avg frame interval: %.3f. FPS: %.3f.",
-                       _performanceStatistics.lastFrameInterval,
-                       _performanceStatistics.averageFrameInterval,
-                       _performanceStatistics.averageFramesPerSecond);
-            _currentPerfLogFrameCount = 0;
-        }
-    }
+    if ((perfLogCntLimit > 0) && (++_currentPerfLogFrameCount >= perfLogCntLimit)) {
+		_currentPerfLogFrameCount = 0;
+		MVKLogInfo("Frame interval: %.2f ms. Avg frame interval: %.2f ms. Avg FPS: %.2f. Reporting every: %d frames. Elapsed time: %.3f seconds.",
+				   _performanceStatistics.lastFrameInterval,
+				   _performanceStatistics.averageFrameInterval,
+				   _performanceStatistics.averageFramesPerSecond,
+				   perfLogCntLimit,
+				   mvkGetElapsedMilliseconds() / 1000.0);
+	}
 }
 
 void MVKSwapchain::getPerformanceStatistics(MVKSwapchainPerformance* pSwapchainPerf) {
@@ -206,8 +193,13 @@ MVKSwapchain::MVKSwapchain(MVKDevice* device,
                                                                                VK_IMAGE_USAGE_SAMPLED_BIT |
                                                                                VK_IMAGE_USAGE_STORAGE_BIT));
 
+	if (pCreateInfo->presentMode == VK_PRESENT_MODE_IMMEDIATE_KHR) {
+		_mtlLayer.displaySyncEnabledMVK = NO;
+	}
+
 	// TODO: set additional CAMetalLayer properties before extracting drawables:
 	//	- presentsWithTransaction
+	//  - maximumDrawableCount (maybe for MAILBOX?)
 	//	- drawsAsynchronously
     //  - colorspace (macOS only) Vulkan only supports sRGB colorspace for now.
     //  - wantsExtendedDynamicRangeContent (macOS only)
@@ -238,8 +230,12 @@ void MVKSwapchain::initSurfaceImages(const VkSwapchainCreateInfoKHR* pCreateInfo
         .flags = 0,
     };
 
-    uint32_t imgCnt = MVK_MAX_SWAPCHAIN_SURFACE_IMAGE_COUNT;
-    _surfaceImages.reserve(imgCnt);
+	VkSurfaceCapabilitiesKHR srfcProps;
+	MVKSurface* mvkSrfc = (MVKSurface*)pCreateInfo->surface;
+	_device->getPhysicalDevice()->getSurfaceCapabilities(mvkSrfc, &srfcProps);
+
+	uint32_t imgCnt = srfcProps.maxImageCount;
+	_surfaceImages.reserve(imgCnt);
     for (uint32_t imgIdx = 0; imgIdx < imgCnt; imgIdx++) {
         _surfaceImages.push_back(_device->createSwapchainImage(&imgInfo, this, NULL));
     }
@@ -254,16 +250,16 @@ void MVKSwapchain::initFrameIntervalTracking() {
     _performanceStatistics.averageFramesPerSecond = 0;
     _currentPerfLogFrameCount = 0;
 
-    _lastFrameTime = [NSDate timeIntervalSinceReferenceDate];
+	_lastFrameTime = mvkGetTimestamp();
 
     // Establish the alpha parameter of a low-pass filter for averaging frame intervals.
-    double RC_over_dt = 10;
-    _averageFrameIntervalFilterAlpha = 1.0 / (1 + RC_over_dt);
+    double RC_over_dt = 10.0;
+    _averageFrameIntervalFilterAlpha = 1.0 / (1.0 + RC_over_dt);
 }
 
 MVKSwapchain::~MVKSwapchain() {
 	for (auto& img : _surfaceImages) { _device->destroySwapchainImage(img, NULL); }
 
-    if (_licenseWatermark) { delete _licenseWatermark; }
+    if (_licenseWatermark) { _licenseWatermark->destroy(); }
 }
 

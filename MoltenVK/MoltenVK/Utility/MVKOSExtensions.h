@@ -25,7 +25,6 @@
 #include <vulkan/vulkan.h>
 
 #import <Metal/Metal.h>
-#import <QuartzCore/CAMetalLayer.h>
 
 
 typedef float MVKOSVersion;
@@ -39,65 +38,28 @@ typedef float MVKOSVersion;
  */
 MVKOSVersion mvkOSVersion(void);
 
-
-#pragma mark -
-#pragma mark MTLTextureDescriptor
-
-/** Extensions to MTLTextureDescriptor to support MoltenVK. */
-@interface MTLTextureDescriptor (MoltenVK)
-
-/** 
- * Replacement for the usage property.
+/**
+ * Returns a monotonic timestamp value for use in Vulkan and performance timestamping.
  *
- * This property allows support under iOS 8. Delegates to the usage property
- * if it is available. otherwise, returns MTLTextureUsageUnknown when read
- * and does nothing when set.
+ * The returned value corresponds to the number of CPU "ticks" since the app was initialized.
+ *
+ * Calling this value twice, subtracting the first value from the second, and then multiplying
+ * the result by the value returned by mvkGetTimestampPeriod() will provide an indication of the
+ * number of nanoseconds between the two calls. The convenience function mvkGetElapsedMilliseconds()
+ * can be used to perform this calculation.
  */
-@property(nonatomic, readwrite) MTLTextureUsage usageMVK;
+uint64_t mvkGetTimestamp();
+
+/** Returns the number of nanoseconds between each increment of the value returned by mvkGetTimestamp(). */
+double mvkGetTimestampPeriod();
 
 /**
- * Replacement for the storageMode property.
- *
- * This property allows support under iOS 8. Delegates to the storageMode property
- * if it is available. otherwise, returns MTLStorageModeShared when read and does 
- * nothing when set.
+ * Returns the number of milliseconds elapsed between startTimestamp and endTimestamp,
+ * each of which should be a value returned by mvkGetTimestamp().
+ * If endTimestamp is zero or not supplied, it is taken to be the current time.
+ * If startTimestamp is zero or not supplied, it is taken to be the time the app was initialized.
  */
-@property(nonatomic, readwrite) MTLStorageMode storageModeMVK;
-
-@end
-
-
-#pragma mark -
-#pragma mark MTLSamplerDescriptor
-
-/** Extensions to MTLSamplerDescriptor to support MoltenVK. */
-@interface MTLSamplerDescriptor (MoltenVK)
-
-/**
- * Replacement for the compareFunction property.
- *
- * This property allows support under iOS 8. Delegates to the compareFunction property
- * if it is available. otherwise, returns MTLTextureUsageUnknown when read and does 
- * nothing when set.
- */
-@property(nonatomic, readwrite) MTLCompareFunction compareFunctionMVK;
-
-@end
-
-
-#pragma mark -
-#pragma mark CAMetalLayer
-
-/** Extensions to CAMetalLayer to support MoltenVK. */
-@interface CAMetalLayer (MoltenVK)
-
-/**
- * Ensures the drawableSize property of this layer is up to date, by combining the size
- * of the bounds property and the contentScale property, and returns the updated value.
- */
--(CGSize) updatedDrawableSizeMVK;
-
-@end
+double mvkGetElapsedMilliseconds(uint64_t startTimestamp = 0, uint64_t endTimestamp = 0);
 
 
 #pragma mark -

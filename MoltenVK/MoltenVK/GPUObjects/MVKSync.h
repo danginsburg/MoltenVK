@@ -55,24 +55,17 @@ public:
 	 */
 	void release();
 
-	/** 
-	 * Indefinitely blocks processing on the current thread until either any or all 
-	 * (depending on configuration) outstanding reservations have been released.
-     *
-     * If reserveAgain is set to true, a single reservation will be added to this
-     * instance once the wait is finished.
-	 */
-	void wait(bool reserveAgain = false);
-
 	/**
 	 * Blocks processing on the current thread until any or all (depending on configuration) outstanding
      * reservations have been released, or until the specified timeout interval in nanoseconds expires.
+	 *
+	 * If timeout is the special value UINT64_MAX the timeout is treated as infinite.
      *
      * If reserveAgain is set to true, a single reservation will be added once this wait is finished.
 	 *
 	 * Returns true if all reservations were cleared, or false if the timeout interval expired.
 	 */
-	bool wait(uint64_t timeout, bool reserveAgain = false);
+	bool wait(uint64_t timeout = UINT64_MAX, bool reserveAgain = false);
 
 
 #pragma mark Construction
@@ -104,23 +97,56 @@ private:
 
 
 #pragma mark -
-#pragma mark MVKSemaphore
+#pragma mark MVKSignalable
 
-/** Represents a Vulkan semaphore. */
-class MVKSemaphore : public MVKBaseDeviceObject {
+/** Abstract class for Vulkan semaphores and fences. */
+class MVKSignalable : public MVKBaseDeviceObject {
 
 public:
 
-	/** Indefinitely blocks processing on the current thread until this semaphore is signaled. */
-	void wait();
+	/* Called when this object has been added to a tracker for later signaling. */
+	void wasAddedToSignaler();
+
+	/**
+	 * Called when this object has been removed from a tracker for later signaling.
+	 * If this object was destroyed while this signal was pending, it will now be deleted.
+	 */
+	void wasRemovedFromSignaler();
+
+	/** If this object is waiting to be signaled, deletion will be deferred until then. */
+	void destroy() override;
+
+
+#pragma mark Construction
+
+	MVKSignalable(MVKDevice* device) : MVKBaseDeviceObject(device) {}
+
+protected:
+	void maybeDestroy();
+
+	std::mutex _signalerLock;
+	uint32_t _signalerCount = 0;
+	bool _isDestroyed = false;
+};
+
+
+#pragma mark -
+#pragma mark MVKSemaphore
+
+/** Represents a Vulkan semaphore. */
+class MVKSemaphore : public MVKSignalable {
+
+public:
 
 	/** 
 	 * Blocks processing on the current thread until this semaphore is 
 	 * signaled, or until the specified timeout in nanoseconds expires.
 	 *
+	 * If timeout is the special value UINT64_MAX the timeout is treated as infinite.
+	 *
 	 * Returns true if this semaphore was signaled, or false if the timeout interval expired.
 	 */
-	bool wait(uint64_t timeout);
+	bool wait(uint64_t timeout = UINT64_MAX);
 
 	/** Signals the semaphore. Unblocks all waiting threads to continue processing. */
 	void signal();
@@ -129,7 +155,7 @@ public:
 #pragma mark Construction
 
     MVKSemaphore(MVKDevice* device, const VkSemaphoreCreateInfo* pCreateInfo)
-        : MVKBaseDeviceObject(device), _blocker(false, 1) {}
+        : MVKSignalable(device), _blocker(false, 1) {}
 
 protected:
 	MVKSemaphoreImpl _blocker;
@@ -140,7 +166,7 @@ protected:
 #pragma mark MVKFence
 
 /** Represents a Vulkan fence. */
-class MVKFence : public MVKBaseDeviceObject {
+class MVKFence : public MVKSignalable {
 
 public:
 
@@ -173,7 +199,7 @@ public:
 	
 #pragma mark Construction
 
-    MVKFence(MVKDevice* device, const VkFenceCreateInfo* pCreateInfo) : MVKBaseDeviceObject(device),
+    MVKFence(MVKDevice* device, const VkFenceCreateInfo* pCreateInfo) : MVKSignalable(device),
     _isSignaled(mvkAreFlagsEnabled(pCreateInfo->flags, VK_FENCE_CREATE_SIGNALED_BIT)) {}
 
 	~MVKFence() override;
@@ -196,24 +222,16 @@ class MVKFenceSitter : public MVKBaseObject {
 public:
 
 	/**
-	 * If this instance has been configured to wait for fences, blocks processing on the
-	 * current thread until any or all of the fences that this instance is waiting for are
-	 * signaled. If this instance has not been configured to wait for fences, this function
-	 * immediately returns true.
-	 *
-	 * Returns whether the lock timed out while waiting.
-	 */
-	void wait();
-
-	/**
 	 * If this instance has been configured to wait for fences, blocks processing on the 
 	 * current thread until any or all of the fences that this instance is waiting for are
 	 * signaled, or until the specified timeout in nanoseconds expires. If this instance
 	 * has not been configured to wait for fences, this function immediately returns true.
 	 *
+	 * If timeout is the special value UINT64_MAX the timeout is treated as infinite.
+	 *
 	 * Returns true if the required fences were triggered, or false if the timeout interval expired.
 	 */
-	bool wait(uint64_t timeout);
+	bool wait(uint64_t timeout = UINT64_MAX);
 
 
 #pragma mark Construction
@@ -248,6 +266,44 @@ VkResult mvkResetFences(uint32_t fenceCount, const VkFence* pFences);
 VkResult mvkWaitForFences(uint32_t fenceCount,
 						  const VkFence* pFences,
 						  VkBool32 waitAll,
-						  uint64_t timeout);
+						  uint64_t timeout = UINT64_MAX);
 
 
+#pragma mark -
+#pragma mark MVKMetalCompiler
+
+/**
+ * Abstract class that creates Metal objects that require compilation, such as
+ * MTLShaderLibrary, MTLFunction, MTLRenderPipelineState and MTLComputePipelineState.
+ *
+ * Instances of this class are one-shot, and can only be used for a single compilation.
+ */
+class MVKMetalCompiler : public MVKBaseDeviceObject {
+
+public:
+
+	/** If this object is waiting for compilation to complete, deletion will be deferred until then. */
+	void destroy() override;
+
+
+#pragma mark Construction
+
+	MVKMetalCompiler(MVKDevice* device) : MVKBaseDeviceObject(device) {}
+
+	~MVKMetalCompiler() override;
+
+protected:
+	void compile(std::unique_lock<std::mutex>& lock, dispatch_block_t block);
+	virtual void handleError();
+	void endCompile(NSError* compileError);
+	void maybeDestroy();
+
+	NSError* _compileError = nil;
+	uint64_t _startTime = 0;
+	bool _isCompileDone = false;
+	bool _isDestroyed = false;
+	std::mutex _completionLock;
+	std::condition_variable _blocker;
+	std::string _compilerType = "Unknown";
+	MVKPerformanceTracker* _pPerformanceTracker = nullptr;
+};

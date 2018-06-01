@@ -43,6 +43,21 @@ VkFormat MVKRenderSubpass::getDepthStencilFormat() {
 	return _renderPass->_attachments[rpAttIdx].getFormat();
 }
 
+VkSampleCountFlagBits MVKRenderSubpass::getSampleCount() {
+	for (auto& ca : _colorAttachments) {
+		uint32_t rpAttIdx = ca.attachment;
+		if (rpAttIdx != VK_ATTACHMENT_UNUSED) {
+			return _renderPass->_attachments[rpAttIdx].getSampleCount();
+		}
+	}
+	uint32_t rpAttIdx = _depthStencilAttachment.attachment;
+	if (rpAttIdx != VK_ATTACHMENT_UNUSED) {
+		return _renderPass->_attachments[rpAttIdx].getSampleCount();
+	}
+
+	return VK_SAMPLE_COUNT_1_BIT;
+}
+
 void MVKRenderSubpass::populateMTLRenderPassDescriptor(MTLRenderPassDescriptor* mtlRPDesc,
 													   MVKFramebuffer* framebuffer,
 													   vector<VkClearValue>& clearValues,
@@ -192,6 +207,8 @@ MVKRenderSubpass::MVKRenderSubpass(MVKRenderPass* renderPass,
 
 VkFormat MVKRenderPassAttachment::getFormat() { return _info.format; }
 
+VkSampleCountFlagBits MVKRenderPassAttachment::getSampleCount() { return _info.samples; }
+
 bool MVKRenderPassAttachment::populateMTLRenderPassAttachmentDescriptor(MTLRenderPassAttachmentDescriptor* mtlAttDesc,
                                                                         MVKRenderSubpass* subpass,
                                                                         bool isRenderingEntireAttachment,
@@ -238,7 +255,7 @@ MVKRenderPassAttachment::MVKRenderPassAttachment(MVKRenderPass* renderPass,
 	_attachmentIndex = uint32_t(_renderPass->_attachments.size());
 
 	// Determine the indices of the first and last render subpasses to use that attachment.
-	_firstUseSubpassIdx = kMVKMaxUnsigned;
+	_firstUseSubpassIdx = kMVKUndefinedLargeUInt32;
 	_lastUseSubpassIdx = 0;
 	for (auto& subPass : _renderPass->_subpasses) {
 		if (subPass.isUsingAttachmentAt(_attachmentIndex)) {

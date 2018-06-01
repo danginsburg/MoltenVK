@@ -60,8 +60,8 @@ MVK_PUBLIC_SYMBOL void vkDestroyInstance(
     VkInstance                                  instance,
 	const VkAllocationCallbacks*                pAllocator) {
 
-	MVKInstance* mvkInst = MVKInstance::getMVKInstance(instance);
-	delete mvkInst;
+	if ( !instance ) { return; }
+	MVKInstance::getMVKInstance(instance)->destroy();
 }
 
 MVK_PUBLIC_SYMBOL VkResult vkEnumeratePhysicalDevices(
@@ -113,11 +113,11 @@ MVK_PUBLIC_SYMBOL void vkGetPhysicalDeviceProperties(
 
 MVK_PUBLIC_SYMBOL void vkGetPhysicalDeviceQueueFamilyProperties(
 	VkPhysicalDevice                            physicalDevice,
-	uint32_t*                                   pCount,
+	uint32_t*                                   pQueueFamilyPropertyCount,
 	VkQueueFamilyProperties*                    pQueueFamilyProperties) {
 	
 	MVKPhysicalDevice* mvkPD = MVKPhysicalDevice::getMVKPhysicalDevice(physicalDevice);
-	mvkPD->getQueueFamilyProperties(pCount, pQueueFamilyProperties);
+	mvkPD->getQueueFamilyProperties(pQueueFamilyPropertyCount, pQueueFamilyProperties);
 }
 
 MVK_PUBLIC_SYMBOL void vkGetPhysicalDeviceMemoryProperties(
@@ -137,9 +137,11 @@ MVK_PUBLIC_SYMBOL PFN_vkVoidFunction vkGetInstanceProcAddr(
 	if (strcmp(pName, "vkCreateInstance") == 0) { return (PFN_vkVoidFunction)vkCreateInstance; }
 	if (strcmp(pName, "vkEnumerateInstanceExtensionProperties") == 0) { return (PFN_vkVoidFunction)vkEnumerateInstanceExtensionProperties; }
 	if (strcmp(pName, "vkEnumerateInstanceLayerProperties") == 0) { return (PFN_vkVoidFunction)vkEnumerateInstanceLayerProperties; }
-
-	MVKInstance* mvkInst = MVKInstance::getMVKInstance(instance);
-	return mvkInst->getProcAddr(pName);
+    if (instance) {
+        MVKInstance* mvkInst = MVKInstance::getMVKInstance(instance);
+        return mvkInst->getProcAddr(pName);
+    }
+    return NULL;
 }
 
 MVK_PUBLIC_SYMBOL PFN_vkVoidFunction vkGetDeviceProcAddr(
@@ -166,8 +168,8 @@ MVK_PUBLIC_SYMBOL void vkDestroyDevice(
 	VkDevice                                    device,
 	const VkAllocationCallbacks*                pAllocator) {
 
-	MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
-	delete mvkDev;
+	if ( !device ) { return; }
+	MVKDevice::getMVKDevice(device)->destroy();
 }
 
 MVK_PUBLIC_SYMBOL VkResult vkEnumerateInstanceExtensionProperties(
@@ -256,6 +258,7 @@ MVK_PUBLIC_SYMBOL void vkFreeMemory(
 	VkDeviceMemory                              mem,
 	const VkAllocationCallbacks*                pAllocator) {
 
+	if ( !mem ) { return; }
 	MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
 	mvkDev->freeMemory((MVKDeviceMemory*)mem, pAllocator);
 }
@@ -405,6 +408,7 @@ MVK_PUBLIC_SYMBOL void vkDestroyFence(
 	VkFence                                     fence,
 	const VkAllocationCallbacks*                pAllocator) {
 
+	if ( !fence ) { return; }
 	MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
 	mvkDev->destroyFence((MVKFence*)fence, pAllocator);
 }
@@ -452,6 +456,7 @@ MVK_PUBLIC_SYMBOL void vkDestroySemaphore(
 	VkSemaphore                                 semaphore,
 	const VkAllocationCallbacks*                pAllocator) {
 
+	if ( !semaphore ) { return; }
 	MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
 	mvkDev->destroySemaphore((MVKSemaphore*)semaphore, pAllocator);
 }
@@ -470,6 +475,7 @@ MVK_PUBLIC_SYMBOL void vkDestroyEvent(
 	VkEvent                                     event,
 	const VkAllocationCallbacks*                pAllocator) {
 
+	if ( !event ) { return; }
 	MVKLogUnimplemented("vkDestroyEvent");
 }
 
@@ -511,6 +517,7 @@ MVK_PUBLIC_SYMBOL void vkDestroyQueryPool(
 	VkQueryPool                                 queryPool,
 	const VkAllocationCallbacks*                pAllocator) {
 
+	if ( !queryPool ) { return; }
 	MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
 	mvkDev->destroyQueryPool((MVKQueryPool*)queryPool, pAllocator);
 }
@@ -546,6 +553,7 @@ MVK_PUBLIC_SYMBOL void vkDestroyBuffer(
 	VkBuffer                                    buffer,
 	const VkAllocationCallbacks*                pAllocator) {
 
+	if ( !buffer ) { return; }
 	MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
 	mvkDev->destroyBuffer((MVKBuffer*)buffer, pAllocator);
 }
@@ -567,6 +575,7 @@ MVK_PUBLIC_SYMBOL void vkDestroyBufferView(
 	VkBufferView                                bufferView,
 	const VkAllocationCallbacks*                pAllocator) {
 
+	if ( !bufferView ) { return; }
     MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
     mvkDev->destroyBufferView((MVKBufferView*)bufferView, pAllocator);
 }
@@ -588,6 +597,7 @@ MVK_PUBLIC_SYMBOL void vkDestroyImage(
 	VkImage                                     image,
 	const VkAllocationCallbacks*                pAllocator) {
 
+	if ( !image ) { return; }
 	MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
 	mvkDev->destroyImage((MVKImage*)image, pAllocator);
 }
@@ -619,6 +629,7 @@ MVK_PUBLIC_SYMBOL void vkDestroyImageView(
 	VkImageView                                 imageView,
 	const VkAllocationCallbacks*                pAllocator) {
 
+	if ( !imageView ) { return; }
 	MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
 	mvkDev->destroyImageView((MVKImageView*)imageView, pAllocator);
 }
@@ -640,6 +651,7 @@ MVK_PUBLIC_SYMBOL void vkDestroyShaderModule(
 	VkShaderModule                              shaderModule,
 	const VkAllocationCallbacks*                pAllocator) {
 
+	if ( !shaderModule ) { return; }
 	MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
 	mvkDev->destroyShaderModule((MVKShaderModule*)shaderModule, pAllocator);
 }
@@ -661,6 +673,7 @@ MVK_PUBLIC_SYMBOL void vkDestroyPipelineCache(
 	VkPipelineCache                             pipelineCache,
 	const VkAllocationCallbacks*                pAllocator) {
 
+	if ( !pipelineCache ) { return; }
 	MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
 	mvkDev->destroyPipelineCache((MVKPipelineCache*)pipelineCache, pAllocator);
 }
@@ -672,7 +685,7 @@ MVK_PUBLIC_SYMBOL VkResult vkGetPipelineCacheData(
 	void*                                       pData) {
 
 	MVKPipelineCache* mvkPLC = (MVKPipelineCache*)pipelineCache;
-	return mvkPLC->getData(pDataSize, pData);
+	return mvkPLC->writeData(pDataSize, pData);
 }
 
 MVK_PUBLIC_SYMBOL VkResult vkMergePipelineCaches(
@@ -714,6 +727,7 @@ MVK_PUBLIC_SYMBOL void vkDestroyPipeline(
 	VkPipeline                                  pipeline,
 	const VkAllocationCallbacks*                pAllocator) {
 
+	if ( !pipeline ) { return; }
     MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
     mvkDev->destroyPipeline((MVKPipeline*)pipeline, pAllocator);
 }
@@ -735,6 +749,7 @@ MVK_PUBLIC_SYMBOL void vkDestroyPipelineLayout(
 	VkPipelineLayout                            pipelineLayout,
 	const VkAllocationCallbacks*                pAllocator) {
 
+	if ( !pipelineLayout ) { return; }
 	MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
 	mvkDev->destroyPipelineLayout((MVKPipelineLayout*)pipelineLayout, pAllocator);
 }
@@ -756,6 +771,7 @@ MVK_PUBLIC_SYMBOL void vkDestroySampler(
 	VkSampler                                   sampler,
 	const VkAllocationCallbacks*                pAllocator) {
 
+	if ( !sampler ) { return; }
 	MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
 	mvkDev->destroySampler((MVKSampler*)sampler, pAllocator);
 }
@@ -777,6 +793,7 @@ MVK_PUBLIC_SYMBOL void vkDestroyDescriptorSetLayout(
 	VkDescriptorSetLayout                       descriptorSetLayout,
 	const VkAllocationCallbacks*                pAllocator) {
 
+	if ( !descriptorSetLayout ) { return; }
 	MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
 	mvkDev->destroyDescriptorSetLayout((MVKDescriptorSetLayout*)descriptorSetLayout, pAllocator);
 }
@@ -798,6 +815,7 @@ MVK_PUBLIC_SYMBOL void vkDestroyDescriptorPool(
 	VkDescriptorPool                            descriptorPool,
 	const VkAllocationCallbacks*                pAllocator) {
 
+	if ( !descriptorPool ) { return; }
 	MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
 	mvkDev->destroyDescriptorPool((MVKDescriptorPool*)descriptorPool, pAllocator);
 }
@@ -859,6 +877,7 @@ MVK_PUBLIC_SYMBOL void vkDestroyFramebuffer(
 	VkFramebuffer                               framebuffer,
 	const VkAllocationCallbacks*                pAllocator) {
 
+	if ( !framebuffer ) { return; }
 	MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
 	mvkDev->destroyFramebuffer((MVKFramebuffer*)framebuffer, pAllocator);
 }
@@ -880,6 +899,7 @@ MVK_PUBLIC_SYMBOL void vkDestroyRenderPass(
 	VkRenderPass                                renderPass,
 	const VkAllocationCallbacks*                pAllocator) {
 
+	if ( !renderPass ) { return; }
 	MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
 	mvkDev->destroyRenderPass((MVKRenderPass*)renderPass, pAllocator);
 }
@@ -912,6 +932,7 @@ MVK_PUBLIC_SYMBOL void vkDestroyCommandPool(
 	VkCommandPool                               commandPool,
 	const VkAllocationCallbacks*                pAllocator) {
 
+	if ( !commandPool ) { return; }
 	MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
 	mvkDev->destroyCommandPool((MVKCommandPool*)commandPool, pAllocator);
 }
@@ -1122,22 +1143,22 @@ MVK_PUBLIC_SYMBOL void vkCmdDrawIndirect(
     VkCommandBuffer                             commandBuffer,
     VkBuffer                                    buffer,
     VkDeviceSize                                offset,
-    uint32_t                                    count,
+    uint32_t                                    drawCount,
     uint32_t                                    stride) {
 	
     MVKCommandBuffer* cmdBuff = MVKCommandBuffer::getMVKCommandBuffer(commandBuffer);
-	mvkCmdDrawIndirect(cmdBuff, buffer, offset, count, stride);
+	mvkCmdDrawIndirect(cmdBuff, buffer, offset, drawCount, stride);
 }
 
 MVK_PUBLIC_SYMBOL void vkCmdDrawIndexedIndirect(
     VkCommandBuffer                             commandBuffer,
     VkBuffer                                    buffer,
     VkDeviceSize                                offset,
-    uint32_t                                    count,
+    uint32_t                                    drawCount,
     uint32_t                                    stride) {
 	
     MVKCommandBuffer* cmdBuff = MVKCommandBuffer::getMVKCommandBuffer(commandBuffer);
-	mvkCmdDrawIndexedIndirect(cmdBuff, buffer, offset, count, stride);
+	mvkCmdDrawIndexedIndirect(cmdBuff, buffer, offset, drawCount, stride);
 }
 
 MVK_PUBLIC_SYMBOL void vkCmdDispatch(
@@ -1471,6 +1492,7 @@ MVK_PUBLIC_SYMBOL void vkDestroySwapchainKHR(
     VkSwapchainKHR                           swapchain,
     const VkAllocationCallbacks*             pAllocator) {
 
+	if ( !swapchain ) { return; }
     MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
     mvkDev->destroySwapchain((MVKSwapchain*)swapchain, pAllocator);
 }
@@ -1514,6 +1536,7 @@ MVK_PUBLIC_SYMBOL void vkDestroySurfaceKHR(
     VkSurfaceKHR                                 surface,
     const VkAllocationCallbacks*                 pAllocator) {
 
+	if ( !surface ) { return; }
     MVKInstance* mvkInst = MVKInstance::getMVKInstance(instance);
     mvkInst->destroySurface((MVKSurface*)surface, pAllocator);
 }

@@ -35,7 +35,7 @@
 #include <MoltenVKSPIRVToMSLConverter/SPIRVToMSLConverter.h>
 #include "mvk_datatypes.h"
 #include "vk_mvk_moltenvk.h"
-#include <mach/mach_time.h>
+#import "CAMetalLayer+MoltenVK.h"
 
 using namespace std;
 
@@ -49,15 +49,19 @@ using namespace std;
 #	define MVKViewClass		NSView
 #endif
 
-// To display the MoltenVK logo watermark by default, define the MVK_WATERMARK build setting.
-#ifdef MVK_WATERMARK
-#   define MVK_DISPLAY_WATERMARK    1
+// To present surface using a command buffer, define the MVK_PRESENT_WITHOUT_COMMAND_BUFFER build setting.
+#ifdef MVK_PRESENT_WITHOUT_COMMAND_BUFFER
+#   define MVK_PRESENT_WITH_COMMAND_BUFFER_BOOL    0
 #else
-#   define MVK_DISPLAY_WATERMARK    0
+#   define MVK_PRESENT_WITH_COMMAND_BUFFER_BOOL    1
 #endif
 
-static uint64_t _mvkTimestampBase;
-static double _mvkTimestampPeriod;
+// To display the MoltenVK logo watermark by default, define the MVK_DISPLAY_WATERMARK build setting.
+#ifdef MVK_DISPLAY_WATERMARK
+#   define MVK_DISPLAY_WATERMARK_BOOL    1
+#else
+#   define MVK_DISPLAY_WATERMARK_BOOL    0
+#endif
 
 
 #pragma mark -
@@ -133,7 +137,7 @@ VkResult MVKPhysicalDevice::getImageFormatProperties(VkFormat format,
     pImageFormatProperties->maxMipLevels = mvkMipmapLevels3D(maxExt);
     pImageFormatProperties->maxArrayLayers = maxLayers;
     pImageFormatProperties->sampleCounts = _metalFeatures.supportedSampleCounts;
-    pImageFormatProperties->maxResourceSize = numeric_limits<int64_t>::max();
+    pImageFormatProperties->maxResourceSize = kMVKUndefinedLargeUInt64;
 
     return VK_SUCCESS;
 }
@@ -164,8 +168,11 @@ VkResult MVKPhysicalDevice::getSurfaceCapabilities(MVKSurface* surface,
 
     VkExtent2D surfExtnt = mvkVkExtent2DFromCGSize(mtlLayer.updatedDrawableSizeMVK);
 
-	pSurfaceCapabilities->minImageCount = MVK_MIN_SWAPCHAIN_SURFACE_IMAGE_COUNT;
-	pSurfaceCapabilities->maxImageCount = MVK_MAX_SWAPCHAIN_SURFACE_IMAGE_COUNT;
+	// Metal supports 3 concurrent drawables, but if the swapchain is destroyed and
+	// rebuilt as part of resizing, one will be held by the current display image.
+	pSurfaceCapabilities->minImageCount = 2;
+	pSurfaceCapabilities->maxImageCount = 2;
+
 	pSurfaceCapabilities->currentExtent = surfExtnt;
 	pSurfaceCapabilities->minImageExtent = surfExtnt;
 	pSurfaceCapabilities->maxImageExtent = surfExtnt;
@@ -226,12 +233,14 @@ VkResult MVKPhysicalDevice::getSurfacePresentModes(MVKSurface* surface,
 	CAMetalLayer* mtlLayer = surface->getCAMetalLayer();
 	if ( !mtlLayer ) { return surface->getConfigurationResult(); }
 
-	// TODO: check which mode(s) are applicable to Metal
-	const VkPresentModeKHR presentModes[] = {
-//		VK_PRESENT_MODE_MAILBOX_KHR,
-		VK_PRESENT_MODE_FIFO_KHR,
-	};
-	const uint presentModesCnt = sizeof(presentModes) / sizeof(VkPresentModeKHR);
+	vector<VkPresentModeKHR> presentModes;
+	presentModes.push_back(VK_PRESENT_MODE_FIFO_KHR);
+
+	if (_metalFeatures.presentModeImmediate) {
+		presentModes.push_back(VK_PRESENT_MODE_IMMEDIATE_KHR);
+	}
+
+	uint32_t presentModesCnt = uint32_t(presentModes.size());
 
 	// If properties aren't actually being requested yet, simply update the returned count
 	if ( !pPresentModes ) {
@@ -257,23 +266,25 @@ VkResult MVKPhysicalDevice::getSurfacePresentModes(MVKSurface* surface,
 VkResult MVKPhysicalDevice::getQueueFamilyProperties(uint32_t* pCount,
 													 VkQueueFamilyProperties* queueProperties) {
 
+	uint32_t qfCnt = uint32_t(_queueFamilies.size());
+
 	// If properties aren't actually being requested yet, simply update the returned count
 	if ( !queueProperties ) {
-		*pCount = getQueueFamilyCount();
+		*pCount = qfCnt;
 		return VK_SUCCESS;
 	}
 
 	// Determine how many families we'll return, and return that number
-	uint32_t qCnt = getQueueFamilyCount();
-	VkResult result = (*pCount <= qCnt) ? VK_SUCCESS : VK_INCOMPLETE;
-	*pCount = min(*pCount, qCnt);
+	*pCount = min(*pCount, qfCnt);
 
 	// Now populate the queue families
-	for (uint32_t qIdx = 0; qIdx < *pCount; qIdx++) {
-		queueProperties[qIdx] = _queueFamilyProperties[qIdx];
+	if (queueProperties) {
+		for (uint32_t qfIdx = 0; qfIdx < *pCount; qfIdx++) {
+			_queueFamilies[qfIdx]->getProperties(&queueProperties[qfIdx]);
+		}
 	}
 
-	return result;
+	return (*pCount <= qfCnt) ? VK_SUCCESS : VK_INCOMPLETE;
 }
 
 
@@ -303,6 +314,7 @@ void MVKPhysicalDevice::initMetalFeatures() {
     _metalFeatures.mslVersion = SPIRVToMSLConverterOptions::makeMSLVersion(1);
     _metalFeatures.maxPerStageTextureCount = 31;
     _metalFeatures.mtlBufferAlignment = 64;
+	_metalFeatures.mtlCopyBufferAlignment = 1;
     _metalFeatures.texelBuffers = true;
 
     if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily3_v1] ) {
@@ -322,14 +334,17 @@ void MVKPhysicalDevice::initMetalFeatures() {
     if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily1_v4] ) {
         _metalFeatures.mslVersion = SPIRVToMSLConverterOptions::makeMSLVersion(2);
         _metalFeatures.ioSurfaces = true;
-        _metalFeatures.depthClipMode = true;
     }
+	if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily2_v4] ) {
+		_metalFeatures.depthClipMode = true;
+	}
 #endif
 
 #if MVK_MACOS
     _metalFeatures.mslVersion = SPIRVToMSLConverterOptions::makeMSLVersion(1, 1);
     _metalFeatures.maxPerStageTextureCount = 128;
     _metalFeatures.mtlBufferAlignment = 256;
+	_metalFeatures.mtlCopyBufferAlignment = 4;
 	_metalFeatures.indirectDrawing = true;
 	_metalFeatures.baseVertexInstanceDrawing = true;
     _metalFeatures.ioSurfaces = true;
@@ -345,11 +360,12 @@ void MVKPhysicalDevice::initMetalFeatures() {
     if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_macOS_GPUFamily1_v3] ) {
         _metalFeatures.mslVersion = SPIRVToMSLConverterOptions::makeMSLVersion(2);
         _metalFeatures.texelBuffers = true;
+		_metalFeatures.presentModeImmediate = true;
     }
 #endif
 
     for (uint32_t sc = VK_SAMPLE_COUNT_1_BIT; sc <= VK_SAMPLE_COUNT_64_BIT; sc <<= 1) {
-        if ([_mtlDevice supportsTextureSampleCount: sc]) {
+        if ([_mtlDevice supportsTextureSampleCount: mvkSampleCountFromVkSampleCountFlagBits((VkSampleCountFlagBits)sc)]) {
             _metalFeatures.supportedSampleCounts |= sc;
         }
     }
@@ -369,6 +385,7 @@ void MVKPhysicalDevice::initFeatures() {
     _features.shaderStorageImageExtendedFormats = true;
     _features.shaderClipDistance = true;
     _features.shaderInt16 = true;
+	_features.multiDrawIndirect = true;
 
 #if MVK_IOS
     _features.textureCompressionETC2 = true;
@@ -410,7 +427,7 @@ void MVKPhysicalDevice::initFeatures() {
 //    VkBool32    sampleRateShading;
 //    VkBool32    dualSrcBlend;                                 // done
 //    VkBool32    logicOp;
-//    VkBool32    multiDrawIndirect;
+//    VkBool32    multiDrawIndirect;							// done
 //    VkBool32    drawIndirectFirstInstance;
 //    VkBool32    depthClamp;                                   // done
 //    VkBool32    depthBiasClamp;                               // done
@@ -466,6 +483,7 @@ void MVKPhysicalDevice::initProperties() {
 	_properties.driverVersion = MVK_VERSION;
 
 	mvkPopulateGPUInfo(_properties, _mtlDevice);
+	initPipelineCacheUUID();
 
 	// Limits
 #if MVK_IOS
@@ -580,7 +598,7 @@ void MVKPhysicalDevice::initProperties() {
     _properties.limits.optimalBufferCopyRowPitchAlignment = 1;
 
 	_properties.limits.timestampComputeAndGraphics = VK_TRUE;
-	_properties.limits.timestampPeriod = _mvkTimestampPeriod;
+	_properties.limits.timestampPeriod = mvkGetTimestampPeriod();
 
     _properties.limits.pointSizeRange[0] = 1;
     _properties.limits.pointSizeRange[1] = 511;
@@ -609,31 +627,33 @@ void MVKPhysicalDevice::initProperties() {
     _properties.limits.standardSampleLocations = VK_FALSE;
     _properties.limits.strictLines = VK_FALSE;
 
+	_properties.limits.maxComputeWorkGroupSize[0] = _properties.limits.maxComputeWorkGroupInvocations;
+	_properties.limits.maxComputeWorkGroupSize[1] = _properties.limits.maxComputeWorkGroupInvocations;
+	_properties.limits.maxComputeWorkGroupSize[2] = _properties.limits.maxComputeWorkGroupInvocations;
+
 
     // Features with no specific limits - default to unlimited int values
 
-    _properties.limits.maxMemoryAllocationCount = numeric_limits<uint32_t>::max();
-    _properties.limits.maxSamplerAllocationCount = numeric_limits<uint32_t>::max();
-    _properties.limits.maxBoundDescriptorSets = numeric_limits<uint32_t>::max();
+    _properties.limits.maxMemoryAllocationCount = kMVKUndefinedLargeUInt32;
+    _properties.limits.maxSamplerAllocationCount = kMVKUndefinedLargeUInt32;
+    _properties.limits.maxBoundDescriptorSets = kMVKUndefinedLargeUInt32;
 
-    _properties.limits.maxComputeWorkGroupCount[0] = numeric_limits<uint32_t>::max();
-    _properties.limits.maxComputeWorkGroupCount[1] = numeric_limits<uint32_t>::max();
-    _properties.limits.maxComputeWorkGroupCount[2] = numeric_limits<uint32_t>::max();
+    _properties.limits.maxComputeWorkGroupCount[0] = kMVKUndefinedLargeUInt32;
+    _properties.limits.maxComputeWorkGroupCount[1] = kMVKUndefinedLargeUInt32;
+    _properties.limits.maxComputeWorkGroupCount[2] = kMVKUndefinedLargeUInt32;
 
-    _properties.limits.maxComputeWorkGroupSize[0] = numeric_limits<uint32_t>::max();
-    _properties.limits.maxComputeWorkGroupSize[1] = numeric_limits<uint32_t>::max();
-    _properties.limits.maxComputeWorkGroupSize[2] = numeric_limits<uint32_t>::max();
+    _properties.limits.maxDrawIndexedIndexValue = numeric_limits<uint32_t>::max() - 1;
+    _properties.limits.maxDrawIndirectCount = kMVKUndefinedLargeUInt32;
 
-    _properties.limits.maxDrawIndexedIndexValue = numeric_limits<uint32_t>::max();
-    _properties.limits.maxDrawIndirectCount = numeric_limits<uint32_t>::max();
+    _properties.limits.minTexelOffset = -8;
+    _properties.limits.maxTexelOffset = 7;
+    _properties.limits.minTexelGatherOffset = _properties.limits.minTexelOffset;
+    _properties.limits.maxTexelGatherOffset = _properties.limits.maxTexelOffset;
 
-    _properties.limits.minTexelOffset = numeric_limits<int32_t>::min();
-    _properties.limits.maxTexelOffset = numeric_limits<int32_t>::max();
-    _properties.limits.minTexelGatherOffset = numeric_limits<int32_t>::min();
-    _properties.limits.maxTexelGatherOffset = numeric_limits<int32_t>::max();
-
-    _properties.limits.maxClipDistances = numeric_limits<uint32_t>::max();
-    _properties.limits.maxCombinedClipAndCullDistances = numeric_limits<uint32_t>::max();
+    _properties.limits.maxClipDistances = kMVKUndefinedLargeUInt32;
+	_properties.limits.maxCullDistances = 0;	// unsupported
+    _properties.limits.maxCombinedClipAndCullDistances = _properties.limits.maxClipDistances +
+														 _properties.limits.maxCullDistances;
 
 
     // Features with unknown limits - default to Vulkan required limits
@@ -672,9 +692,6 @@ void MVKPhysicalDevice::initProperties() {
     _properties.limits.minInterpolationOffset = 0.0;
     _properties.limits.maxInterpolationOffset = 0.0;
     _properties.limits.subPixelInterpolationOffsetBits = 0;
-
-    _properties.limits.maxCullDistances = 0;
-
 }
 
 
@@ -798,6 +815,50 @@ void MVKPhysicalDevice::initProperties() {
 //	VkBool32                                    residencyNonResidentStrict;
 //} VkPhysicalDeviceSparseProperties;
 
+
+void MVKPhysicalDevice::initPipelineCacheUUID() {
+	size_t uuidSize = sizeof(_properties.pipelineCacheUUID);
+
+	// Clear the UUID
+	memset(&_properties.pipelineCacheUUID, 0, uuidSize);
+
+	uint32_t uuidComponent;
+	size_t uuidComponentSize = sizeof(uint32_t);
+
+	size_t uuidComponentOffset = uuidSize;
+
+	// Lower 4 bytes contains MoltenVK version
+	uuidComponent = MVK_VERSION;
+	uuidComponentOffset -= uuidComponentSize;
+	*(uint32_t*)&_properties.pipelineCacheUUID[uuidComponentOffset] = NSSwapHostIntToBig(uuidComponent);
+
+	// Next 4 bytes contains hightest Metal feature set supported by this device
+	uuidComponent = (uint32_t)getHighestMTLFeatureSet();
+	uuidComponentOffset -= uuidComponentSize;
+	*(uint32_t*)&_properties.pipelineCacheUUID[uuidComponentOffset] = NSSwapHostIntToBig(uuidComponent);
+}
+
+MTLFeatureSet MVKPhysicalDevice::getHighestMTLFeatureSet() {
+#if MVK_IOS
+	MTLFeatureSet maxFS = MTLFeatureSet_iOS_GPUFamily4_v1;
+	MTLFeatureSet minFS = MTLFeatureSet_iOS_GPUFamily1_v1;
+#endif
+
+#if MVK_MACOS
+	MTLFeatureSet maxFS = MTLFeatureSet_macOS_GPUFamily1_v3;
+	MTLFeatureSet minFS = MTLFeatureSet_macOS_GPUFamily1_v1;
+#endif
+
+	for (NSUInteger fs = maxFS; fs > minFS; fs--) {
+		MTLFeatureSet mtlFS = (MTLFeatureSet)fs;
+		if ( [_mtlDevice supportsFeatureSet: mtlFS] ) {
+			return mtlFS;
+		}
+	}
+
+	return minFS;
+}
+
 /** Initializes the memory properties of this instance. */
 void MVKPhysicalDevice::initMemoryProperties() {
 
@@ -850,34 +911,59 @@ void MVKPhysicalDevice::initMemoryProperties() {
 #endif
 }
 
-void MVKPhysicalDevice::logFeatureSets() {
-	string fsMsg = "GPU device %s (vendorID: %#06x, deviceID: %#06x, pipelineCacheUUID: %s) supports the following Metal Feature Sets:";
+void MVKPhysicalDevice::logGPUInfo() {
+	string devTypeStr;
+	switch (_properties.deviceType) {
+		case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+			devTypeStr = "Discrete";
+			break;
+		case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+			devTypeStr = "Integrated";
+			break;
+		case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
+			devTypeStr = "Virtual";
+			break;
+		case VK_PHYSICAL_DEVICE_TYPE_CPU:
+			devTypeStr = "CPU Emulation";
+			break;
+		default:
+			devTypeStr = "Unknown";
+			break;
+	}
+
+	string fsMsg = "GPU device:";
+	fsMsg += "\n\t\tmodel: %s";
+	fsMsg += "\n\t\ttype: %s";
+	fsMsg += "\n\t\tvendorID: %#06x";
+	fsMsg += "\n\t\tdeviceID: %#06x";
+	fsMsg += "\n\t\tpipelineCacheUUID: %s";
+	fsMsg += "\n\tsupports the following Metal Feature Sets:";
 
 #if MVK_IOS
-    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily4_v1] ) { fsMsg += "\n\tiOS GPU Family 4 v1"; }
+    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily4_v1] ) { fsMsg += "\n\tviOS GPU Family 4 v1"; }
 
-    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily3_v3] ) { fsMsg += "\n\tiOS GPU Family 3 v3"; }
-    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily3_v2] ) { fsMsg += "\n\tiOS GPU Family 3 v2"; }
-    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily3_v1] ) { fsMsg += "\n\tiOS GPU Family 3 v1"; }
+    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily3_v3] ) { fsMsg += "\n\t\tiOS GPU Family 3 v3"; }
+    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily3_v2] ) { fsMsg += "\n\t\tiOS GPU Family 3 v2"; }
+    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily3_v1] ) { fsMsg += "\n\t\tiOS GPU Family 3 v1"; }
 
-    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily2_v4] ) { fsMsg += "\n\tiOS GPU Family 2 v4"; }
-    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily2_v3] ) { fsMsg += "\n\tiOS GPU Family 2 v3"; }
-    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily2_v2] ) { fsMsg += "\n\tiOS GPU Family 2 v2"; }
-    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily2_v1] ) { fsMsg += "\n\tiOS GPU Family 2 v1"; }
+    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily2_v4] ) { fsMsg += "\n\t\tiOS GPU Family 2 v4"; }
+    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily2_v3] ) { fsMsg += "\n\t\tiOS GPU Family 2 v3"; }
+    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily2_v2] ) { fsMsg += "\n\t\tiOS GPU Family 2 v2"; }
+    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily2_v1] ) { fsMsg += "\n\t\tiOS GPU Family 2 v1"; }
 
-    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily1_v4] ) { fsMsg += "\n\tiOS GPU Family 1 v4"; }
-    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily1_v3] ) { fsMsg += "\n\tiOS GPU Family 1 v3"; }
-    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily1_v2] ) { fsMsg += "\n\tiOS GPU Family 1 v2"; }
-    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily1_v1] ) { fsMsg += "\n\tiOS GPU Family 1 v1"; }
+    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily1_v4] ) { fsMsg += "\n\t\tiOS GPU Family 1 v4"; }
+    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily1_v3] ) { fsMsg += "\n\t\tiOS GPU Family 1 v3"; }
+    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily1_v2] ) { fsMsg += "\n\t\tiOS GPU Family 1 v2"; }
+    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_iOS_GPUFamily1_v1] ) { fsMsg += "\n\t\tiOS GPU Family 1 v1"; }
 #endif
 
 #if MVK_MACOS
-    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_macOS_GPUFamily1_v3] ) { fsMsg += "\n\tOSX GPU Family 1 v3"; }
-    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_macOS_GPUFamily1_v2] ) { fsMsg += "\n\tOSX GPU Family 1 v2"; }
-    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_macOS_GPUFamily1_v1] ) { fsMsg += "\n\tOSX GPU Family 1 v1"; }
+    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_macOS_GPUFamily1_v3] ) { fsMsg += "\n\t\tmacOS GPU Family 1 v3"; }
+    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_macOS_GPUFamily1_v2] ) { fsMsg += "\n\t\tmacOS GPU Family 1 v2"; }
+    if ( [_mtlDevice supportsFeatureSet: MTLFeatureSet_macOS_GPUFamily1_v1] ) { fsMsg += "\n\t\tmacOS GPU Family 1 v1"; }
 #endif
 
-	MVKLogInfo(fsMsg.c_str(), _properties.deviceName, _properties.vendorID, _properties.deviceID,
+	MVKLogInfo(fsMsg.c_str(), _properties.deviceName, devTypeStr.c_str(), _properties.vendorID, _properties.deviceID,
 			   [[[NSUUID alloc] initWithUUIDBytes: _properties.pipelineCacheUUID] autorelease].UUIDString.UTF8String);
 }
 
@@ -885,11 +971,16 @@ void MVKPhysicalDevice::logFeatureSets() {
 void MVKPhysicalDevice::initQueueFamilies() {
 
 	// TODO: determine correct values
-	_queueFamilyCount = 1;
-	_queueFamilyProperties[0].queueFlags = (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT);
-    _queueFamilyProperties[0].queueCount = 16;
-	_queueFamilyProperties[0].timestampValidBits = 64;
-	_queueFamilyProperties[0].minImageTransferGranularity = { 1, 1, 1};
+	VkQueueFamilyProperties qfProps;
+	qfProps.queueFlags = (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT);
+	qfProps.queueCount = 8;
+	qfProps.timestampValidBits = 64;
+	qfProps.minImageTransferGranularity = { 1, 1, 1};
+
+	uint32_t qfCount = 1;
+	for (uint32_t qfIdx = 0; qfIdx < qfCount; qfIdx++) {
+		_queueFamilies.push_back(new MVKQueueFamily(this, qfIdx, &qfProps));
+	}
 }
 
 MVKPhysicalDevice::MVKPhysicalDevice(MVKInstance* mvkInstance, id<MTLDevice> mtlDevice) {
@@ -901,10 +992,11 @@ MVKPhysicalDevice::MVKPhysicalDevice(MVKInstance* mvkInstance, id<MTLDevice> mtl
 	initProperties();           // Call third.
 	initMemoryProperties();
 	initQueueFamilies();
-	logFeatureSets();
+	logGPUInfo();
 }
 
 MVKPhysicalDevice::~MVKPhysicalDevice() {
+	mvkDestroyContainerContents(_queueFamilies);
 	[_mtlDevice release];
 }
 
@@ -917,12 +1009,16 @@ PFN_vkVoidFunction MVKDevice::getProcAddr(const char* pName) {
 }
 
 VkResult MVKDevice::getDeviceQueue(uint32_t queueFamilyIndex, uint32_t queueIndex, VkQueue* pQueue) {
-	*pQueue = _queueFamilies[queueFamilyIndex]->getQueue(queueIndex)->getVkQueue();
+	*pQueue = _queuesByQueueFamilyIndex[queueFamilyIndex][queueIndex]->getVkQueue();
 	return VK_SUCCESS;
 }
 
 VkResult MVKDevice::waitIdle() {
-    for (auto& q : _queues) { q->waitIdle(kMVKCommandUseDeviceWaitIdle); }
+	for (auto& queues : _queuesByQueueFamilyIndex) {
+		for (MVKQueue* q : queues) {
+			q->waitIdle(kMVKCommandUseDeviceWaitIdle);
+		}
+	}
 	return VK_SUCCESS;
 }
 
@@ -962,7 +1058,8 @@ MVKBuffer* MVKDevice::createBuffer(const VkBufferCreateInfo* pCreateInfo,
 
 void MVKDevice::destroyBuffer(MVKBuffer* mvkBuff,
 							  const VkAllocationCallbacks* pAllocator) {
-	delete removeResource(mvkBuff);
+	removeResource(mvkBuff);
+	mvkBuff->destroy();
 }
 
 MVKBufferView* MVKDevice::createBufferView(const VkBufferViewCreateInfo* pCreateInfo,
@@ -972,7 +1069,7 @@ MVKBufferView* MVKDevice::createBufferView(const VkBufferViewCreateInfo* pCreate
 
 void MVKDevice::destroyBufferView(MVKBufferView* mvkBuffView,
                                   const VkAllocationCallbacks* pAllocator) {
-    delete mvkBuffView;
+    mvkBuffView->destroy();
 }
 
 MVKImage* MVKDevice::createImage(const VkImageCreateInfo* pCreateInfo,
@@ -982,7 +1079,8 @@ MVKImage* MVKDevice::createImage(const VkImageCreateInfo* pCreateInfo,
 
 void MVKDevice::destroyImage(MVKImage* mvkImg,
 							 const VkAllocationCallbacks* pAllocator) {
-	delete removeResource(mvkImg);
+	removeResource(mvkImg);
+	mvkImg->destroy();
 }
 
 MVKImageView* MVKDevice::createImageView(const VkImageViewCreateInfo* pCreateInfo,
@@ -992,7 +1090,7 @@ MVKImageView* MVKDevice::createImageView(const VkImageViewCreateInfo* pCreateInf
 
 void MVKDevice::destroyImageView(MVKImageView* mvkImgView,
 								 const VkAllocationCallbacks* pAllocator) {
-	delete mvkImgView;
+	mvkImgView->destroy();
 }
 
 MVKSwapchain* MVKDevice::createSwapchain(const VkSwapchainCreateInfoKHR* pCreateInfo,
@@ -1002,7 +1100,7 @@ MVKSwapchain* MVKDevice::createSwapchain(const VkSwapchainCreateInfoKHR* pCreate
 
 void MVKDevice::destroySwapchain(MVKSwapchain* mvkSwpChn,
 								 const VkAllocationCallbacks* pAllocator) {
-	delete mvkSwpChn;
+	mvkSwpChn->destroy();
 }
 
 MVKSwapchainImage* MVKDevice::createSwapchainImage(const VkImageCreateInfo* pCreateInfo,
@@ -1013,7 +1111,8 @@ MVKSwapchainImage* MVKDevice::createSwapchainImage(const VkImageCreateInfo* pCre
 
 void MVKDevice::destroySwapchainImage(MVKSwapchainImage* mvkImg,
 									  const VkAllocationCallbacks* pAllocator) {
-	delete removeResource(mvkImg);
+	removeResource(mvkImg);
+	mvkImg->destroy();
 }
 
 MVKFence* MVKDevice::createFence(const VkFenceCreateInfo* pCreateInfo,
@@ -1023,7 +1122,7 @@ MVKFence* MVKDevice::createFence(const VkFenceCreateInfo* pCreateInfo,
 
 void MVKDevice::destroyFence(MVKFence* mvkFence,
 							 const VkAllocationCallbacks* pAllocator) {
-	delete mvkFence;
+	mvkFence->destroy();
 }
 
 MVKSemaphore* MVKDevice::createSemaphore(const VkSemaphoreCreateInfo* pCreateInfo,
@@ -1033,7 +1132,7 @@ MVKSemaphore* MVKDevice::createSemaphore(const VkSemaphoreCreateInfo* pCreateInf
 
 void MVKDevice::destroySemaphore(MVKSemaphore* mvkSem4,
 								 const VkAllocationCallbacks* pAllocator) {
-	delete mvkSem4;
+	mvkSem4->destroy();
 }
 
 MVKQueryPool* MVKDevice::createQueryPool(const VkQueryPoolCreateInfo* pCreateInfo,
@@ -1052,7 +1151,7 @@ MVKQueryPool* MVKDevice::createQueryPool(const VkQueryPoolCreateInfo* pCreateInf
 
 void MVKDevice::destroyQueryPool(MVKQueryPool* mvkQP,
 								 const VkAllocationCallbacks* pAllocator) {
-	delete mvkQP;
+	mvkQP->destroy();
 }
 
 MVKShaderModule* MVKDevice::createShaderModule(const VkShaderModuleCreateInfo* pCreateInfo,
@@ -1062,7 +1161,7 @@ MVKShaderModule* MVKDevice::createShaderModule(const VkShaderModuleCreateInfo* p
 
 void MVKDevice::destroyShaderModule(MVKShaderModule* mvkShdrMod,
 									const VkAllocationCallbacks* pAllocator) {
-	delete mvkShdrMod;
+	mvkShdrMod->destroy();
 }
 
 MVKPipelineCache* MVKDevice::createPipelineCache(const VkPipelineCacheCreateInfo* pCreateInfo,
@@ -1072,7 +1171,7 @@ MVKPipelineCache* MVKDevice::createPipelineCache(const VkPipelineCacheCreateInfo
 
 void MVKDevice::destroyPipelineCache(MVKPipelineCache* mvkPLC,
 									 const VkAllocationCallbacks* pAllocator) {
-	delete mvkPLC;
+	mvkPLC->destroy();
 }
 
 MVKPipelineLayout* MVKDevice::createPipelineLayout(const VkPipelineLayoutCreateInfo* pCreateInfo,
@@ -1082,7 +1181,7 @@ MVKPipelineLayout* MVKDevice::createPipelineLayout(const VkPipelineLayoutCreateI
 
 void MVKDevice::destroyPipelineLayout(MVKPipelineLayout* mvkPLL,
 									  const VkAllocationCallbacks* pAllocator) {
-	delete mvkPLL;
+	mvkPLL->destroy();
 }
 
 template<typename PipelineType, typename PipelineInfoType>
@@ -1118,7 +1217,7 @@ VkResult MVKDevice::createPipelines(VkPipelineCache pipelineCache,
         } else {
             rslt = plRslt;
             pPipelines[plIdx] = VK_NULL_HANDLE;
-            delete mvkPL;
+            mvkPL->destroy();
         }
     }
 
@@ -1143,7 +1242,7 @@ template VkResult MVKDevice::createPipelines<MVKComputePipeline, VkComputePipeli
 
 void MVKDevice::destroyPipeline(MVKPipeline* mvkPL,
                                 const VkAllocationCallbacks* pAllocator) {
-    delete mvkPL;
+    mvkPL->destroy();
 }
 
 MVKSampler* MVKDevice::createSampler(const VkSamplerCreateInfo* pCreateInfo,
@@ -1153,7 +1252,7 @@ MVKSampler* MVKDevice::createSampler(const VkSamplerCreateInfo* pCreateInfo,
 
 void MVKDevice::destroySampler(MVKSampler* mvkSamp,
 							   const VkAllocationCallbacks* pAllocator) {
-	delete mvkSamp;
+	mvkSamp->destroy();
 }
 
 MVKDescriptorSetLayout* MVKDevice::createDescriptorSetLayout(const VkDescriptorSetLayoutCreateInfo* pCreateInfo,
@@ -1163,7 +1262,7 @@ MVKDescriptorSetLayout* MVKDevice::createDescriptorSetLayout(const VkDescriptorS
 
 void MVKDevice::destroyDescriptorSetLayout(MVKDescriptorSetLayout* mvkDSL,
 										   const VkAllocationCallbacks* pAllocator) {
-	delete mvkDSL;
+	mvkDSL->destroy();
 }
 
 MVKDescriptorPool* MVKDevice::createDescriptorPool(const VkDescriptorPoolCreateInfo* pCreateInfo,
@@ -1173,7 +1272,7 @@ MVKDescriptorPool* MVKDevice::createDescriptorPool(const VkDescriptorPoolCreateI
 
 void MVKDevice::destroyDescriptorPool(MVKDescriptorPool* mvkDP,
 									  const VkAllocationCallbacks* pAllocator) {
-	delete mvkDP;
+	mvkDP->destroy();
 }
 
 MVKFramebuffer* MVKDevice::createFramebuffer(const VkFramebufferCreateInfo* pCreateInfo,
@@ -1183,7 +1282,7 @@ MVKFramebuffer* MVKDevice::createFramebuffer(const VkFramebufferCreateInfo* pCre
 
 void MVKDevice::destroyFramebuffer(MVKFramebuffer* mvkFB,
 								   const VkAllocationCallbacks* pAllocator) {
-	delete mvkFB;
+	mvkFB->destroy();
 }
 
 MVKRenderPass* MVKDevice::createRenderPass(const VkRenderPassCreateInfo* pCreateInfo,
@@ -1193,7 +1292,7 @@ MVKRenderPass* MVKDevice::createRenderPass(const VkRenderPassCreateInfo* pCreate
 
 void MVKDevice::destroyRenderPass(MVKRenderPass* mvkRP,
 								  const VkAllocationCallbacks* pAllocator) {
-	delete mvkRP;
+	mvkRP->destroy();
 }
 
 MVKCommandPool* MVKDevice::createCommandPool(const VkCommandPoolCreateInfo* pCreateInfo,
@@ -1203,7 +1302,7 @@ MVKCommandPool* MVKDevice::createCommandPool(const VkCommandPoolCreateInfo* pCre
 
 void MVKDevice::destroyCommandPool(MVKCommandPool* mvkCmdPool,
 								   const VkAllocationCallbacks* pAllocator) {
-	delete mvkCmdPool;
+	mvkCmdPool->destroy();
 }
 
 MVKDeviceMemory* MVKDevice::allocateMemory(const VkMemoryAllocateInfo* pAllocateInfo,
@@ -1213,7 +1312,7 @@ MVKDeviceMemory* MVKDevice::allocateMemory(const VkMemoryAllocateInfo* pAllocate
 
 void MVKDevice::freeMemory(MVKDeviceMemory* mvkDevMem,
 						   const VkAllocationCallbacks* pAllocator) {
-	delete mvkDevMem;
+	mvkDevMem->destroy();
 }
 
 /** Adds the specified resource for tracking, and returns the added resource. */
@@ -1241,43 +1340,47 @@ void MVKDevice::applyMemoryBarrier(VkPipelineStageFlags srcStageMask,
 	}
 }
 
-#define asMS(V)     ((V) * 1000.0)
-void MVKDevice::addShaderCompilationEventPerformance(MVKShaderCompilationEventPerformance& shaderCompilationEvent,
-                                                     NSTimeInterval startTime, NSTimeInterval endTime) {
+uint64_t MVKDevice::getPerformanceTimestampImpl() { return mvkGetTimestamp(); }
 
-    if ( !_mvkConfig.performanceTracking ) { return; }
+void MVKDevice::addActivityPerformanceImpl(MVKPerformanceTracker& shaderCompilationEvent,
+										   uint64_t startTime, uint64_t endTime) {
+    lock_guard<mutex> lock(_perfLock);
 
-    lock_guard<mutex> lock(_shaderCompPerfLock);
+	double currInterval = mvkGetElapsedMilliseconds(startTime, endTime);
+    shaderCompilationEvent.minimumDuration = min(currInterval, shaderCompilationEvent.minimumDuration);
+    shaderCompilationEvent.maximumDuration = max(currInterval, shaderCompilationEvent.maximumDuration);
+    double totalInterval = (shaderCompilationEvent.averageDuration * shaderCompilationEvent.count++) + currInterval;
+    shaderCompilationEvent.averageDuration = totalInterval / shaderCompilationEvent.count;
 
-    NSTimeInterval currInterval = (endTime ? endTime : getPerformanceTimestamp()) - startTime;
-    shaderCompilationEvent.minimumInterval = min(currInterval, shaderCompilationEvent.minimumInterval);
-    shaderCompilationEvent.maximumInterval = max(currInterval, shaderCompilationEvent.maximumInterval);
-    double totalInverval = (shaderCompilationEvent.averageInterval * shaderCompilationEvent.count++) + currInterval;
-    shaderCompilationEvent.averageInterval = totalInverval / shaderCompilationEvent.count;
-
-    MVKLogInfo("%s performance curr: %.3f ms, avg: %.3f ms, min: %.3f ms, max: %.3f ms, count: %d",
-               getShaderCompilationEventName(shaderCompilationEvent),
-               asMS(currInterval),
-               asMS(shaderCompilationEvent.averageInterval),
-               asMS(shaderCompilationEvent.minimumInterval),
-               asMS(shaderCompilationEvent.maximumInterval),
-               shaderCompilationEvent.count);
+	MVKLogDebug("Performance to %s curr: %.3f ms, avg: %.3f ms, min: %.3f ms, max: %.3f ms, count: %d",
+				getActivityPerformanceDescription(shaderCompilationEvent),
+				currInterval,
+				shaderCompilationEvent.averageDuration,
+				shaderCompilationEvent.minimumDuration,
+				shaderCompilationEvent.maximumDuration,
+				shaderCompilationEvent.count);
 }
 
-const char* MVKDevice::getShaderCompilationEventName(MVKShaderCompilationEventPerformance& shaderCompilationEvent) {
-    if (&shaderCompilationEvent == &_shaderCompilationPerformance.spirvToMSL) { return "Convert SPIR-V to MSL source code"; }
-    if (&shaderCompilationEvent == &_shaderCompilationPerformance.mslCompile) { return "Compile MSL source code into a MTLLibrary"; }
-    if (&shaderCompilationEvent == &_shaderCompilationPerformance.mslLoad) { return "Load pre-compiled MSL code into a MTLLibrary"; }
-    if (&shaderCompilationEvent == &_shaderCompilationPerformance.functionRetrieval) { return "Retrieve a MTLFunction from a MTLLibrary"; }
-    if (&shaderCompilationEvent == &_shaderCompilationPerformance.functionSpecialization) { return "Specialize a retrieved MTLFunction"; }
-    if (&shaderCompilationEvent == &_shaderCompilationPerformance.pipelineCompile) { return "Compile MTLFunctions into a pipeline"; }
+const char* MVKDevice::getActivityPerformanceDescription(MVKPerformanceTracker& shaderCompilationEvent) {
+	if (&shaderCompilationEvent == &_performanceStatistics.shaderCompilation.hashShaderCode) { return "hash shader SPIR-V code"; }
+    if (&shaderCompilationEvent == &_performanceStatistics.shaderCompilation.spirvToMSL) { return "convert SPIR-V to MSL source code"; }
+    if (&shaderCompilationEvent == &_performanceStatistics.shaderCompilation.mslCompile) { return "compile MSL source code into a MTLLibrary"; }
+    if (&shaderCompilationEvent == &_performanceStatistics.shaderCompilation.mslLoad) { return "load pre-compiled MSL code into a MTLLibrary"; }
+	if (&shaderCompilationEvent == &_performanceStatistics.shaderCompilation.shaderLibraryFromCache) { return "retrieve shader library from the cache"; }
+    if (&shaderCompilationEvent == &_performanceStatistics.shaderCompilation.functionRetrieval) { return "retrieve a MTLFunction from a MTLLibrary"; }
+    if (&shaderCompilationEvent == &_performanceStatistics.shaderCompilation.functionSpecialization) { return "specialize a retrieved MTLFunction"; }
+    if (&shaderCompilationEvent == &_performanceStatistics.shaderCompilation.pipelineCompile) { return "compile MTLFunctions into a pipeline"; }
+	if (&shaderCompilationEvent == &_performanceStatistics.pipelineCache.sizePipelineCache) { return "calculate cache size required to write MSL to pipeline cache"; }
+	if (&shaderCompilationEvent == &_performanceStatistics.pipelineCache.writePipelineCache) { return "write MSL to pipeline cache"; }
+	if (&shaderCompilationEvent == &_performanceStatistics.pipelineCache.readPipelineCache) { return "read MSL from pipeline cache"; }
+	if (&shaderCompilationEvent == &_performanceStatistics.queue.mtlQueueAccess) { return "access MTLCommandQueue"; }
     return "Unknown shader compile event";
 }
 
-void MVKDevice::getShaderCompilationPerformanceStatistics(MVKShaderCompilationPerformance* pShaderCompPerf) {
-    lock_guard<mutex> lock(_shaderCompPerfLock);
+void MVKDevice::getPerformanceStatistics(MVKPerformanceStatistics* pPerf) {
+    lock_guard<mutex> lock(_perfLock);
 
-    if (pShaderCompPerf) { *pShaderCompPerf = _shaderCompilationPerformance; }
+    if (pPerf) { *pPerf = _performanceStatistics; }
 }
 
 
@@ -1329,7 +1432,8 @@ uint32_t MVKDevice::expandVisibilityResultMTLBuffer(uint32_t queryCount) {
 #pragma mark Construction
 
 MVKDevice::MVKDevice(MVKPhysicalDevice* physicalDevice, const VkDeviceCreateInfo* pCreateInfo) : _mvkConfig() {
-//	MVKLogDebug("Creating MVKDevice. Elapsed time: %.6f ms.", mvkGetElapsedMilliseconds());
+
+	initPerformanceTracking();
 
 	_physicalDevice = physicalDevice;
 	_pFeatures = &_physicalDevice->_features;
@@ -1340,11 +1444,14 @@ MVKDevice::MVKDevice(MVKPhysicalDevice* physicalDevice, const VkDeviceCreateInfo
     // Init const config. Use a pointer to bypass the const qualifier.
     MVKDeviceConfiguration* pCfg = (MVKDeviceConfiguration*)&_mvkConfig;
     pCfg->debugMode = MVK_DEBUG;
-    pCfg->supportLargeQueryPools = false;
+	pCfg->synchronousQueueSubmits = false;
+    pCfg->supportLargeQueryPools = true;
     pCfg->shaderConversionFlipVertexY = true;
-    pCfg->displayWatermark = MVK_DISPLAY_WATERMARK;
+	pCfg->presentWithCommandBuffer = MVK_PRESENT_WITH_COMMAND_BUFFER_BOOL;
+    pCfg->displayWatermark = MVK_DISPLAY_WATERMARK_BOOL;
     pCfg->performanceTracking = MVK_DEBUG;
     pCfg->performanceLoggingFrameCount = MVK_DEBUG ? 300 : 0;
+	pCfg->metalCompileTimeout = MVK_DEBUG ? UINT64_MAX : (125 * 1000 * 1000);
 
     _globalVisibilityResultMTLBuffer = nil;
     _globalVisibilityQueryCount = 0;
@@ -1356,83 +1463,48 @@ MVKDevice::MVKDevice(MVKPhysicalDevice* physicalDevice, const VkDeviceCreateInfo
     _commandResourceFactory = new MVKCommandResourceFactory(this);
 
 	// Create the queues
-	uint32_t qfCnt = _physicalDevice->getQueueFamilyCount();
-	VkQueueFamilyProperties qfProperties[qfCnt];
-	_physicalDevice->getQueueFamilyProperties(&qfCnt, qfProperties);
-	_queueFamilies.assign(qfCnt, VK_NULL_HANDLE);
-
-	// For each element in the queue record count, create a queue family with the requested number of queues.
 	uint32_t qrCnt = pCreateInfo->queueCreateInfoCount;
 	for (uint32_t qrIdx = 0; qrIdx < qrCnt; qrIdx++) {
 		const VkDeviceQueueCreateInfo* pQFInfo = &pCreateInfo->pQueueCreateInfos[qrIdx];
 		uint32_t qfIdx = pQFInfo->queueFamilyIndex;
-		if (_queueFamilies[qfIdx] == VK_NULL_HANDLE) {
-			MVKQueueFamily* qFam = new MVKQueueFamily(this, pQFInfo, &qfProperties[qfIdx]);
-			_queueFamilies[qfIdx] = qFam;
-
-			// Extract the queues from the queue family into a cache
-			uint32_t qCnt = qFam->getQueueCount();
-			for (uint32_t qIdx = 0; qIdx < qCnt; qIdx++) {
-				_queues.push_back(qFam->getQueue(qIdx));
-			}
+		MVKQueueFamily* qFam = _physicalDevice->_queueFamilies[qfIdx];
+		_queuesByQueueFamilyIndex.resize(qfIdx + 1);	// Ensure an entry for this queue family exists
+		auto& queues = _queuesByQueueFamilyIndex[qfIdx];
+		for (uint32_t qIdx = 0; qIdx < pQFInfo->queueCount; qIdx++) {
+			queues.push_back(new MVKQueue(this, qFam, qIdx, pQFInfo->pQueuePriorities[qIdx]));
 		}
 	}
-
-    initPerformanceTracking();
 
 	MVKLogInfo("Created VkDevice to run on GPU %s", _pProperties->deviceName);
 }
 
 void MVKDevice::initPerformanceTracking() {
-    MVKShaderCompilationEventPerformance initPerf;
+    MVKPerformanceTracker initPerf;
     initPerf.count = 0;
-    initPerf.averageInterval = 0.0;
-    initPerf.minimumInterval = numeric_limits<double>::max();
-    initPerf.maximumInterval = 0.0;
+    initPerf.averageDuration = 0.0;
+    initPerf.minimumDuration = numeric_limits<double>::max();
+    initPerf.maximumDuration = 0.0;
 
-    _shaderCompilationPerformance.spirvToMSL = initPerf;
-    _shaderCompilationPerformance.mslCompile = initPerf;
-    _shaderCompilationPerformance.mslLoad = initPerf;
-    _shaderCompilationPerformance.functionRetrieval = initPerf;
-    _shaderCompilationPerformance.functionSpecialization = initPerf;
-    _shaderCompilationPerformance.pipelineCompile = initPerf;
+	_performanceStatistics.shaderCompilation.hashShaderCode = initPerf;
+    _performanceStatistics.shaderCompilation.spirvToMSL = initPerf;
+    _performanceStatistics.shaderCompilation.mslCompile = initPerf;
+    _performanceStatistics.shaderCompilation.mslLoad = initPerf;
+	_performanceStatistics.shaderCompilation.shaderLibraryFromCache = initPerf;
+    _performanceStatistics.shaderCompilation.functionRetrieval = initPerf;
+    _performanceStatistics.shaderCompilation.functionSpecialization = initPerf;
+    _performanceStatistics.shaderCompilation.pipelineCompile = initPerf;
+	_performanceStatistics.pipelineCache.sizePipelineCache = initPerf;
+	_performanceStatistics.pipelineCache.writePipelineCache = initPerf;
+	_performanceStatistics.pipelineCache.readPipelineCache = initPerf;
+	_performanceStatistics.queue.mtlQueueAccess = initPerf;
 }
 
 MVKDevice::~MVKDevice() {
-	mvkDestroyContainerContents(_queueFamilies);
+	for (auto& queues : _queuesByQueueFamilyIndex) {
+		mvkDestroyContainerContents(queues);
+	}
     [_globalVisibilityResultMTLBuffer release];
-    delete _commandResourceFactory;
+	_commandResourceFactory->destroy();
 }
 
-
-#pragma mark -
-#pragma mark Functions
-
-/** Initializes the timestamping functionality. */
-static void initTimestamps() {
-	_mvkTimestampBase = mach_absolute_time();
-	mach_timebase_info_data_t timebase;
-	mach_timebase_info(&timebase);
-	_mvkTimestampPeriod = (double)timebase.numer / (double)timebase.denom;
-//	MVKLogDebug("Initializing MoltenVK timestamping. Mach time: %llu. Time period: %d / %d = %.6f.", _mvkTimestampBase, timebase.numer, timebase.denom, _mvkTimestampPeriod);
-}
-
-uint64_t mvkGetTimestamp() { return mach_absolute_time() - _mvkTimestampBase; }
-
-double mvkGetElapsedMilliseconds() { return (double)mvkGetTimestamp() * _mvkTimestampPeriod / 1e6; }
-
-
-#pragma mark Library initialization
-
-/**
- * Called automatically when the framework is loaded and initialized.
- *
- * Initialize various device content.
- */
-static bool _mvkDevicesInitialized = false;
-__attribute__((constructor)) static void MVKInitDataTypes() {
-	if (_mvkDevicesInitialized ) { return; }
-	initTimestamps();
-	_mvkDevicesInitialized = true;
-}
 

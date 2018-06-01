@@ -21,7 +21,6 @@
 #include "MVKStrings.h"
 #include "FileSupport.h"
 #include "spirv_msl.hpp"
-#include "spirv_glsl.hpp"
 #include <spirv-tools/libspirv.h>
 #import <CoreFoundation/CFByteOrder.h>
 
@@ -34,19 +33,21 @@ using namespace std;
 
 // Returns whether the vector contains the value (using a matches(T&) comparison member function). */
 template<class T>
-bool contains(vector<T>& vec, T& val) {
-    for (T& vecVal : vec) { if (vecVal.matches(val)) { return true; } }
+bool contains(const vector<T>& vec, const T& val) {
+    for (const T& vecVal : vec) { if (vecVal.matches(val)) { return true; } }
     return false;
 }
 
-MVK_PUBLIC_SYMBOL bool SPIRVToMSLConverterOptions::matches(SPIRVToMSLConverterOptions& other) {
+MVK_PUBLIC_SYMBOL bool SPIRVToMSLConverterOptions::matches(const SPIRVToMSLConverterOptions& other) const {
+	if (entryPointStage != other.entryPointStage) { return false; }
     if (mslVersion != other.mslVersion) { return false; }
     if (!!shouldFlipVertexY != !!other.shouldFlipVertexY) { return false; }
     if (!!isRenderingPoints != !!other.isRenderingPoints) { return false; }
+	if (entryPointName != other.entryPointName) { return false; }
     return true;
 }
 
-MVK_PUBLIC_SYMBOL bool MSLVertexAttribute::matches(MSLVertexAttribute& other) {
+MVK_PUBLIC_SYMBOL bool MSLVertexAttribute::matches(const MSLVertexAttribute& other) const {
     if (location != other.location) { return false; }
     if (mslBuffer != other.mslBuffer) { return false; }
     if (mslOffset != other.mslOffset) { return false; }
@@ -55,7 +56,7 @@ MVK_PUBLIC_SYMBOL bool MSLVertexAttribute::matches(MSLVertexAttribute& other) {
     return true;
 }
 
-MVK_PUBLIC_SYMBOL bool MSLResourceBinding::matches(MSLResourceBinding& other) {
+MVK_PUBLIC_SYMBOL bool MSLResourceBinding::matches(const MSLResourceBinding& other) const {
     if (stage != other.stage) { return false; }
     if (descriptorSet != other.descriptorSet) { return false; }
     if (binding != other.binding) { return false; }
@@ -66,7 +67,7 @@ MVK_PUBLIC_SYMBOL bool MSLResourceBinding::matches(MSLResourceBinding& other) {
 }
 
 // Check them all in case inactive VA's duplicate locations used by active VA's.
-MVK_PUBLIC_SYMBOL bool SPIRVToMSLConverterContext::isVertexAttributeLocationUsed(uint32_t location) {
+MVK_PUBLIC_SYMBOL bool SPIRVToMSLConverterContext::isVertexAttributeLocationUsed(uint32_t location) const {
     for (auto& va : vertexAttributes) {
         if ((va.location == location) && va.isUsedByShader) { return true; }
     }
@@ -74,22 +75,22 @@ MVK_PUBLIC_SYMBOL bool SPIRVToMSLConverterContext::isVertexAttributeLocationUsed
 }
 
 // Check them all in case inactive VA's duplicate buffers used by active VA's.
-MVK_PUBLIC_SYMBOL bool SPIRVToMSLConverterContext::isVertexBufferUsed(uint32_t mslBuffer) {
+MVK_PUBLIC_SYMBOL bool SPIRVToMSLConverterContext::isVertexBufferUsed(uint32_t mslBuffer) const {
     for (auto& va : vertexAttributes) {
         if ((va.mslBuffer == mslBuffer) && va.isUsedByShader) { return true; }
     }
     return false;
 }
 
-MVK_PUBLIC_SYMBOL bool SPIRVToMSLConverterContext::matches(SPIRVToMSLConverterContext& other) {
+MVK_PUBLIC_SYMBOL bool SPIRVToMSLConverterContext::matches(const SPIRVToMSLConverterContext& other) const {
 
     if ( !options.matches(other.options) ) { return false; }
 
-    for (auto& va : vertexAttributes) {
+    for (const auto& va : vertexAttributes) {
         if (va.isUsedByShader && !contains(other.vertexAttributes, va)) { return false; }
     }
 
-    for (auto& rb : resourceBindings) {
+    for (const auto& rb : resourceBindings) {
         if (rb.isUsedByShader && !contains(other.resourceBindings, rb)) { return false; }
     }
     
@@ -97,7 +98,7 @@ MVK_PUBLIC_SYMBOL bool SPIRVToMSLConverterContext::matches(SPIRVToMSLConverterCo
 }
 
 // Aligns the usage of the destination context to that of the source context.
-MVK_PUBLIC_SYMBOL void SPIRVToMSLConverterContext::alignUsageWith(SPIRVToMSLConverterContext& srcContext) {
+MVK_PUBLIC_SYMBOL void SPIRVToMSLConverterContext::alignUsageWith(const SPIRVToMSLConverterContext& srcContext) {
 
     for (auto& va : vertexAttributes) {
         va.isUsedByShader = false;
@@ -119,7 +120,7 @@ MVK_PUBLIC_SYMBOL void SPIRVToMSLConverterContext::alignUsageWith(SPIRVToMSLConv
 #pragma mark SPIRVToMSLConverter
 
 /** Populates content extracted from the SPRI-V compiler. */
-void populateFromCompiler(spirv_cross::Compiler& compiler, SPIRVEntryPointsByName& entryPoints);
+void populateFromCompiler(spirv_cross::Compiler* pCompiler, SPIRVEntryPoint& entryPoint, SPIRVToMSLConverterOptions& options);
 
 MVK_PUBLIC_SYMBOL void SPIRVToMSLConverter::setSPIRV(const vector<uint32_t>& spirv) { _spirv = spirv; }
 
@@ -170,58 +171,76 @@ MVK_PUBLIC_SYMBOL bool SPIRVToMSLConverter::convert(SPIRVToMSLConverterContext& 
 		resBindings.push_back(rb);
 	}
 
-    spirv_cross::CompilerMSL mslCompiler(_spirv);
 
-    // Establish the MSL options for the compiler
-    // This needs to be done in two steps...for CompilerMSL and its superclass.
-    auto mslOpts = mslCompiler.get_options();
+	spirv_cross::CompilerMSL* pMSLCompiler = nullptr;
+
+#ifndef SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS
+	try {
+#endif
+		pMSLCompiler = new spirv_cross::CompilerMSL(_spirv);
+
+		if (context.options.hasEntryPoint()) {
+			pMSLCompiler->set_entry_point(context.options.entryPointName, context.options.entryPointStage);
+		}
+
+		// Establish the MSL options for the compiler
+		// This needs to be done in two steps...for CompilerMSL and its superclass.
+		auto mslOpts = pMSLCompiler->get_msl_options();
 
 #if MVK_MACOS
-    mslOpts.platform = spirv_cross::CompilerMSL::Options::macOS;
+		mslOpts.platform = spirv_cross::CompilerMSL::Options::macOS;
 #endif
 #if MVK_IOS
-    mslOpts.platform = spirv_cross::CompilerMSL::Options::iOS;
+		mslOpts.platform = spirv_cross::CompilerMSL::Options::iOS;
 #endif
 
-    mslOpts.msl_version = context.options.mslVersion;
-    mslOpts.enable_point_size_builtin = context.options.isRenderingPoints;
-    mslOpts.resolve_specialized_array_lengths = true;
-    mslCompiler.set_options(mslOpts);
+		mslOpts.msl_version = context.options.mslVersion;
+		mslOpts.enable_point_size_builtin = context.options.isRenderingPoints;
+		mslOpts.resolve_specialized_array_lengths = true;
+		pMSLCompiler->set_msl_options(mslOpts);
 
-    auto scOpts = mslCompiler.CompilerGLSL::get_options();
-    scOpts.vertex.flip_vert_y = context.options.shouldFlipVertexY;
-    mslCompiler.CompilerGLSL::set_options(scOpts);
+		auto scOpts = pMSLCompiler->get_common_options();
+		scOpts.vertex.flip_vert_y = context.options.shouldFlipVertexY;
+		pMSLCompiler->set_common_options(scOpts);
 
-	try {
-		_msl = mslCompiler.compile(&vtxAttrs, &resBindings);
+		_msl = pMSLCompiler->compile(&vtxAttrs, &resBindings);
         if (shouldLogMSL) { logSource(_msl, "MSL", "Converted"); }
+#ifndef SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS
 	} catch (spirv_cross::CompilerError& ex) {
 		string errMsg("MSL conversion error: ");
 		errMsg += ex.what();
 		logError(errMsg.data());
-        if (shouldLogMSL) {
-            _msl = mslCompiler.get_partial_source();
+        if (shouldLogMSL && pMSLCompiler) {
+            _msl = pMSLCompiler->get_partial_source();
             logSource(_msl, "MSL", "Partially converted");
         }
 	}
+#endif
 
     // Populate content extracted from the SPRI-V compiler.
-    populateFromCompiler(mslCompiler, _entryPoints);
+	populateFromCompiler(pMSLCompiler, _entryPoint, context.options);
 
     // To check GLSL conversion
     if (shouldLogGLSL) {
-        spirv_cross::CompilerGLSL glslCompiler(_spirv);
-        string glsl;
-        try {
-            glsl = glslCompiler.compile();
+		spirv_cross::CompilerGLSL* pGLSLCompiler = nullptr;
+
+#ifndef SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS
+		try {
+#endif
+			pGLSLCompiler = new spirv_cross::CompilerGLSL(_spirv);
+			string glsl = pGLSLCompiler->compile();
             logSource(glsl, "GLSL", "Estimated original");
+#ifndef SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS
         } catch (spirv_cross::CompilerError& ex) {
             string errMsg("Original GLSL extraction error: ");
             errMsg += ex.what();
             logMsg(errMsg.data());
-            glsl = glslCompiler.get_partial_source();
-            logSource(glsl, "GLSL", "Partially converted");
+			if (pGLSLCompiler) {
+				string glsl = pGLSLCompiler->get_partial_source();
+				logSource(glsl, "GLSL", "Partially converted");
+			}
         }
+#endif
     }
 
 	// Copy whether the vertex attributes and resource bindings are used by the shader
@@ -309,28 +328,34 @@ void SPIRVToMSLConverter::logSource(string& src, const char* srcLang, const char
 
 #pragma mark Support functions
 
-void populateFromCompiler(spirv_cross::Compiler& compiler, SPIRVEntryPointsByName& entryPoints) {
+void populateFromCompiler(spirv_cross::Compiler* pCompiler, SPIRVEntryPoint& entryPoint, SPIRVToMSLConverterOptions& options) {
 
-    uint32_t minDim = 1;
-    entryPoints.clear();
-    for (string& epOrigName : compiler.get_entry_points()) {
-        auto& spvEP = compiler.get_entry_point(epOrigName);
-        auto& wgSize = spvEP.workgroup_size;
+	if ( !pCompiler ) { return; }
 
-        SPIRVEntryPoint mvkEP;
-        mvkEP.mtlFunctionName = spvEP.name;
-        mvkEP.workgroupSize.width = max(wgSize.x, minDim);
-        mvkEP.workgroupSize.height = max(wgSize.y, minDim);
-        mvkEP.workgroupSize.depth = max(wgSize.z, minDim);
+	spirv_cross::SPIREntryPoint spvEP;
+	if (options.hasEntryPoint()) {
+		spvEP = pCompiler->get_entry_point(options.entryPointName, options.entryPointStage);
+	} else {
+		const auto& entryPoints = pCompiler->get_entry_points_and_stages();
+		if ( !entryPoints.empty() ) {
+			auto& ep = entryPoints[0];
+			spvEP = pCompiler->get_entry_point(ep.name, ep.execution_model);
+		}
+	}
 
-        spirv_cross::SpecializationConstant width, height, depth;
-        mvkEP.workgroupSizeId.constant = compiler.get_work_group_size_specialization_constants(width, height, depth);
-        mvkEP.workgroupSizeId.width = width.constant_id;
-        mvkEP.workgroupSizeId.height = height.constant_id;
-        mvkEP.workgroupSizeId.depth = depth.constant_id;
+	uint32_t minDim = 1;
+	auto& wgSize = spvEP.workgroup_size;
 
-        entryPoints[epOrigName] = mvkEP;
-    }
+	entryPoint.mtlFunctionName = spvEP.name;
+	entryPoint.workgroupSize.width = max(wgSize.x, minDim);
+	entryPoint.workgroupSize.height = max(wgSize.y, minDim);
+	entryPoint.workgroupSize.depth = max(wgSize.z, minDim);
+
+	spirv_cross::SpecializationConstant width, height, depth;
+	entryPoint.workgroupSizeId.constant = pCompiler->get_work_group_size_specialization_constants(width, height, depth);
+	entryPoint.workgroupSizeId.width = width.constant_id;
+	entryPoint.workgroupSizeId.height = height.constant_id;
+	entryPoint.workgroupSizeId.depth = depth.constant_id;
 }
 
 MVK_PUBLIC_SYMBOL void mvk::logSPIRV(vector<uint32_t>& spirv, string& spvLog) {

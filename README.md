@@ -12,7 +12,7 @@ Copyright (c) 2014-2018 [The Brenwill Workshop Ltd.](http://www.brenwill.com)
 *This document is written in [Markdown](http://en.wikipedia.org/wiki/Markdown) format. 
 For best results, use a Markdown reader.*
 
-
+[![Build Status](https://travis-ci.org/KhronosGroup/MoltenVK.svg?branch=master)](https://travis-ci.org/KhronosGroup/MoltenVK)
 
 Table of Contents
 -----------------
@@ -20,11 +20,11 @@ Table of Contents
 - [About This Document](#about_this)
 - [Introduction](#intro)
 - [Installing **MoltenVK**](#install)
-- [Third-Party Libraries](#third-party)
-	- [Updating the Third-Party Library Versions](#update_third-party)
 - [Building **MoltenVK**](#building)
+- [Running the **MoltenVK** Demo Applications](#demos)
 - [Using **MoltenVK** in Your Application](#using)
-- [Third-Party Credits](#credits)
+- [**MoltenVK** and *Vulkan* Compliance](#compliance)
+- [Contributing to **MoltenVK** Development](#contributing)
 
 
 
@@ -36,7 +36,10 @@ This document describes how to use the **MoltenVK** open-source repository to bu
 runtime distribution package.
 
 To learn how to integrate the **MoltenVK** runtime into a game or application, see the 
-[**MoltenVK Runtime User Guide**](Docs/MoltenVK_Runtime_UserGuide.md) document in the `Docs` directory. 
+[`Docs/MoltenVK_Runtime_UserGuide.md `](Docs/MoltenVK_Runtime_UserGuide.md) document in the `Docs` directory. 
+
+If you are just looking for a pre-built **MoltenVK** runtime binary, you can download it as part of the 
+[*LunarG SDK*](https://vulkan.lunarg.com).
 
 
 
@@ -46,7 +49,7 @@ Introduction
 
 **MoltenVK** contains two products:
 
-- **MoltenVK** is an implementation of the [*Vulkan*](https://www.khronos.org/vulkan) 
+- **MoltenVK** is an implementation of the [*Vulkan 1.0*](https://www.khronos.org/vulkan) 
   graphics and compute API, that runs on Apple's [*Metal*](https://developer.apple.com/metal) 
   graphics and compute framework on both *iOS* and *macOS*.
 
@@ -63,81 +66,47 @@ Introduction
 Installing **MoltenVK**
 -----------------------
 
-**MoltenVK** relies on several third-party open-source libraries, which are described in the 
-[next section](#third-party). The easiest way to install **MoltenVK** is to recursively clone 
-this `MoltenVK` repository, and then run the `External/makeAll` script to create necessary 
-components within the third-party libraries.
+To install **MoltenVK**, clone this `MoltenVK` repository, and then run the 
+`fetchDependencies` script to retrieve and build several external 
+open-source libraries on which **MoltenVK** relies:
 
-1. Ensure you have `python3` and `asciidoctor` installed:
+1. Ensure you have `cmake` and `python3` installed:
 
-		brew install python3
-		sudo gem install asciidoctor
+		brew install cmake
+		brew install python
 
-2. Recursively clone the `MoltenVK` repository:
+   For faster dependency builds, you can also optionally install `ninja`:
 
-		git clone --recursive https://github.com/KhronosGroup/MoltenVK.git
+		brew install ninja
 
-3. Run the third-party build script:
+2. Clone the `MoltenVK` repository:
 
-		cd MoltenVK/External
-		./makeAll
+		git clone https://github.com/KhronosGroup/MoltenVK.git
 
-See the [next section](#third-party) for more information about the third-party libraries, 
-and how to work with them within the **MoltenVK** development environment.
+3. Retrieve and build the external libraries:
 
+		cd MoltenVK
+		./fetchDependencies
 
-<a name="third-party"></a>
-Third-Party Libraries
----------------------
-
-**MoltenVK** makes use of several third-party open-source libraries.
-Development of some of these components is managed separately, and are retrieved into
-**MoltenVK** as submodule repositories.
-
-If you used the `--recursive` option when cloning this repository, as described 
-[above](#install), all third party libraries will have been retrieved.
-
-If you did not use the `--recursive` option when cloning this repository, you can retrieve 
-and install these libraries into your `MoltenVK` repository environment as follows from within
-the `MoltenVK` repository:
-
-	git submodule update --init --recursive
-	cd External
-	./makeAll
-
-
-<a name="update_third-party"></a>
-### Updating the Third-Party Library Versions
-
-If you are developing enhancements to **MoltenVK**, you can update the versions of the 
-Third-Party libraries used by **MoltenVK** to the latest versions available by re-cloning 
-and re-building the submodules using the `getLatestAll` script:
-
-	cd External
-	./getLatestAll
-
-The updated versions will then be "locked in" the next time the `MoltenVK` repository is committed to `git`.
-
-This procdure updates all of the Third-Party library submodules. To update only a single submodule,
-or for more information about the various Third-Party libraries and submodules used by **MoltenVK**,
-please refer to the following documents:
-
-- [`MoltenVK/ThirdPartyConfig.md`](MoltenVK/ThirdPartyConfig.md)
-- [`MoltenVKShaderConverter/ThirdPartyConfig.md`](MoltenVKShaderConverter/ThirdPartyConfig.md)
-
+For more information about the external open-source libraries used by **MoltenVK**,
+see the [`ExternalRevisions/README.md`](ExternalRevisions/README.md) document.
 
 
 <a name="building"></a>
 Building **MoltenVK**
 -------------------
 
->***Note:*** Before attempting to build **MoltenVK**, be sure you have followed the 
-instructions in the [*Third-Party Components*](#third-party) section above to retrieve 
-and install the required third-party components.
+At development time, **MoltenVK** references advanced OS frameworks during building.
+ 
+- *Xcode 9* or above is required to build and link **MoltenVK** projects.
 
->***Note:*** At runtime, **MoltenVK** can run on *iOS 9* and *macOS 10.11* devices,
->but it does reference advanced OS frameworks during building. *Xcode 9* 
->or above is required to build **MoltenVK**, and build and link **MoltenVK** projects.
+Once built, **MoltenVK** can be run on *iOS* or *macOS* devices that support *Metal*.
+
+- **MoltenVK** requires at least *macOS 10.11* or  *iOS 9*.
+- Information on *macOS* devices that are compatible with *Metal* can be found in 
+  [this article](http://www.idownloadblog.com/2015/06/22/how-to-find-mac-el-capitan-metal-compatible).
+- Information on compatible *iOS* devices that are compatible with *Metal* can be found in 
+  [this article](https://developer.apple.com/library/content/documentation/DeviceInformation/Reference/iOSDeviceCompatibility/HardwareGPUInformation/HardwareGPUInformation.html).
 
 The `MoltenVKPackaging.xcodeproj` *Xcode* project contains targets and schemes to build 
 and package the entire **MoltenVK** runtime distribution package, or to build individual 
@@ -163,10 +132,35 @@ With this packaging structure, you can follow the [instructions below](#using) t
 to the **MoltenVK** frameworks in the `Package/Latest` directory, to provide the flexibility to test your 
 app with either a **Debug** build, or a higher-performance **Release** build.
 
-Once you have built the **MoltenVK** runtime distribution package, the **MoltenVK** demo apps can be 
-accessed from the `Demos/Demos.xcworkspace` *Xcode* workspace. This is the same workspace that is 
-included in the **MoltenVK** runtime distribution package, and you can use it to build and run the
-**MoltenVK** demo apps, or to add new demos to this **MoltenVK** repository.
+
+### Building from the Command Line
+
+If you prefer to build **MoltenVK** from the command line, or to include the activity in a larger build script,
+you can do so using the following command from within the `MoltenVK` repository:
+
+	xcodebuild -project MoltenVKPackaging.xcodeproj -scheme "MoltenVK (Release)" build
+
+or
+
+	xcodebuild -project MoltenVKPackaging.xcodeproj -scheme "MoltenVK (Debug)" build
+
+
+
+<a name="demos"></a>
+Running the **MoltenVK** Demo Applications
+------------------------------------------
+
+Once you have compiled and built the **MoltenVK** runtime distribution package from this **MoltenVK** repository, 
+as described in the [Building **MoltenVK**](#building) section, you can explore how **MoltenVK** provides *Vulkan* 
+support on *iOS* and *macOS* by investigating and running the demo applications that are included in **MoltenVK**.
+
+The **MoltenVK** demo apps are located in the `Demos` folder. Each demo app is available as an *Xcode* project.
+To review and run the included demo apps, open the `Demos/Demos.xcworkspace` workspace in *Xcode*.
+
+Please read the [`Demos/README.md`](Demos/README.md) document for a description of each demo app, and instructions 
+on running the demo apps. Several of the demo apps allow you to explore a variety of *Vulkan* features by modifying
+*Xcode* build settings. Additional demos can be downloaded and built from external repositories, as described in the
+[`Demos/README.md`](Demos/README.md) document
 
 
 
@@ -174,30 +168,79 @@ included in the **MoltenVK** runtime distribution package, and you can use it to
 Using **MoltenVK** in Your Application
 --------------------------------------
 
-Once you have compiled and built the **MoltenVK** runtime distribution package from this **MoltenVK** 
-repository, as described in the [previous section](#building), follow the instructions in the installation 
-section of the [**MoltenVK Runtime User Guide**](Docs/MoltenVK_Runtime_UserGuide.md#install) document in the
-`Docs` directory of the **MoltenVK** runtime distribution package found in the `Package/Latest` directory,
-to link the **MoltenVK** frameworks and libraries in the `Package/Latest` directory to your application.
+Once you have compiled and built the **MoltenVK** runtime distribution package from this **MoltenVK** repository, 
+as described in the [Building **MoltenVK**](#building) section, follow the instructions in the Installation 
+section of the [`Docs/MoltenVK_Runtime_UserGuide.md`](Docs/MoltenVK_Runtime_UserGuide.md#install) document in the
+`Docs` directory, to link the **MoltenVK** frameworks and libraries to your application.
 
 The runtime distribution package in the `Package/Latest` directory is a stand-alone package, and you can copy 
 the contents of that directory out of this **MoltenVK** repository into your own application building environment.
 
 
 
-<a name="credits"></a>
-Third-Party Credits
--------------------
+<a name="compliance"></a>
 
-**MoltenVK** uses technology from the following open-source frameworks:
+**MoltenVK** and *Vulkan* Compliance
+------------------------------------
 
-- [*Vulkan-Hpp*](https://github.com/KhronosGroup/Vulkan-Hpp)
-- [*Vulkan-Docs*](https://github.com/KhronosGroup/Vulkan-Docs)
-- [*Vulkan-LoaderAndValidationLayers*](https://github.com/KhronosGroup/Vulkan-LoaderAndValidationLayers)
-- [*tinyxml2*](https://github.com/leethomason/tinyxml2)
+**MoltenVK** is designed to be a *Vulkan 1.0* driver that runs on *macOS* and *iOS* platforms by mapping *Vulkan*
+capability to native *Metal* capability.
 
-**MoltenVKShaderConverter** uses technology from the following open-source frameworks:
+The fundamental design and development goal of **MoltenVK** is to provide this capability in a way that 
+is both maximally compliant with the *Vulkan 1.0* specification, and maximally  performant.
 
-- [*SPIRV-Cross*](https://github.com/KhronosGroup/SPIRV-Cross)
-- [*SPIRV-Tools*](https://github.com/KhronosGroup/SPIRV-Tools)
-- [*glslang*](https://github.com/KhronosGroup/glslang)
+Such compliance and performance is inherently affected by the capability available through *Metal*, as the 
+native driver on *macOS* and *iOS* platforms. *Vulkan* compliance may fall into one of the following categories:
+
+- Direct mapping between *Vulkan* capabilities and *Metal* capabilities. Within **MoltenVK**, almost all capability
+  is the result of this type of direct mapping. 
+  
+- Synthesized compliance through alternate implementation. A very small amount of capability is provided using
+  this mechanism, such as via an extra render or compute shader stage.
+
+- Non-compliance. This appears where the capabilities of *Vulkan* and *Metal* are sufficiently different, that
+  there is no practical, or reasonably performant, mechanism to implement a *Vulkan* capability in *Metal*. 
+  Because of design differences between *Vulkan* and *Metal*, a very small amount of capability falls into this 
+  category, and at present **MoltenVK** is **_not_** fully compliant with the *Vulkan* specification. A list of 
+  known limitations is documented in the [`Docs/MoltenVK_Runtime_UserGuide.md`](Docs/MoltenVK_Runtime_UserGuide.md#limitations) 
+  document in the `Docs` directory.
+
+The **MoltenVK** development team welcomes you to [post Issues](https://github.com/KhronosGroup/MoltenVK/issues) 
+of non-compliance, and engage in discussions about how compliance can be improved, and non-compliant features can 
+be implemented or worked around.
+
+**MoltenVK** is a key component of the [*Khronos Vulkan Portability Initiative*](https://www.khronos.org/vulkan/portability-initiative), 
+whose intention is to provide specifications, resources, and tools to allow developers to understand and design 
+their *Vulkan* apps for maximum cross-platform compatibility and portability, including on platforms, such as 
+*macOS* and *iOS*, where a native *Vulkan* driver is not avaialble. 
+
+
+
+<a name="contributing"></a>
+
+Contributing to **MoltenVK** Development
+----------------------------------------
+
+As a public open-source project, **MoltenVK** benefits from code contributions from a wide range of developers, 
+and we encourage you to get involved and contribute code to this **MoltenVK** repository.
+
+To contribute your code, submit a [Pull Request](https://github.com/KhronosGroup/MoltenVK/pulls) 
+to this repository. The first time you do this, you will be asked to agree to the **MoltenVK** 
+[Contributor License Agreement](https://cla-assistant.io/KhronosGroup/MoltenVK).
+
+
+### Licensing
+
+**MoltenVK** is licensed under the Apache 2.0 license. All new source code files should include a 
+copyright header at the top, containing your authorship copyright and the Apache 2.0 licensing stub. 
+You may copy the text from an existing source code file as a template.
+
+The Apache 2.0 license guarantees that code in the **MoltenVK** repository is free of Intellectual Property
+encumbrances. In submitting code to this repository, you are agreeing that the code is free of any Intellectual 
+Property claims.  
+
+
+### Code Formatting
+
+When contirbuting code, please honour the code formatting style found in existing **MoltenVK** source code.
+In future, this will formally be enforced using `clang-format`.

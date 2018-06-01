@@ -152,7 +152,7 @@
 				A904B5351C9A08C90008C013 /* lunarg.ppm */,
 			);
 			name = demos;
-			path = ../VulkanSamples/demos;
+			path = "../Vulkan-LoaderAndValidationLayers/demos";
 			sourceTree = "<group>";
 		};
 		A9295EAA1CECEF0900EFC483 /* Frameworks */ = {
@@ -226,6 +226,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = A9B53B241C3AC0BE00ABC6F6 /* Build configuration list for PBXNativeTarget "Cube-macOS" */;
 			buildPhases = (
+				A9BA29C5204F24D400EA6575 /* Generate SPIR-V shaders */,
 				A9B53B141C3AC0BE00ABC6F6 /* Resources */,
 				A9B53B171C3AC0BE00ABC6F6 /* Sources */,
 				A9B53B1B1C3AC0BE00ABC6F6 /* Frameworks */,
@@ -244,6 +245,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = A9B53B401C3AC15200ABC6F6 /* Build configuration list for PBXNativeTarget "Cube-iOS" */;
 			buildPhases = (
+				A9BA29C6204F298800EA6575 /* Generate SPIR-V shaders */,
 				A9B53B2E1C3AC15200ABC6F6 /* Resources */,
 				A9B53B331C3AC15200ABC6F6 /* Sources */,
 				A9B53B371C3AC15200ABC6F6 /* Frameworks */,
@@ -264,7 +266,7 @@
 		29B97313FDCFA39411CA2CEA /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
-				LastUpgradeCheck = 0900;
+				LastUpgradeCheck = 0930;
 				TargetAttributes = {
 					A9B53B0F1C3AC0BE00ABC6F6 = {
 						DevelopmentTeam = VU3TCKU48B;
@@ -319,6 +321,37 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A9BA29C5204F24D400EA6575 /* Generate SPIR-V shaders */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Generate SPIR-V shaders";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\n\n\"${PROJECT_DIR}/../../../MoltenVKShaderConverter/Tools/MoltenVKShaderConverter\" -gi -so -xs \"-\" -d \"${PROJECT_DIR}/../Vulkan-LoaderAndValidationLayers/demos\"\n";
+		};
+		A9BA29C6204F298800EA6575 /* Generate SPIR-V shaders */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Generate SPIR-V shaders";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\n\n\"${PROJECT_DIR}/../../../MoltenVKShaderConverter/Tools/MoltenVKShaderConverter\" -gi -so -xs \"-\" -d \"${PROJECT_DIR}/../Vulkan-LoaderAndValidationLayers/demos\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		A9B53B171C3AC0BE00ABC6F6 /* Sources */ = {
@@ -445,8 +478,9 @@
 				GCC_WARN_ABOUT_DEPRECATED_FUNCTIONS = NO;
 				GCC_WARN_ABOUT_RETURN_TYPE = YES;
 				HEADER_SEARCH_PATHS = (
+					"\"$(SRCROOT)/include\"",
 					"\"$(SRCROOT)/../../../MoltenVK/include\"",
-					"\"$(SRCROOT)/../VulkanSamples/include\"",
+					"\"$(SRCROOT)/../Vulkan-LoaderAndValidationLayers/include\"",
 				);
 				ONLY_ACTIVE_ARCH = YES;
 				OTHER_LDFLAGS = "-ObjC";
@@ -469,8 +503,9 @@
 				GCC_WARN_ABOUT_DEPRECATED_FUNCTIONS = NO;
 				GCC_WARN_ABOUT_RETURN_TYPE = YES;
 				HEADER_SEARCH_PATHS = (
+					"\"$(SRCROOT)/include\"",
 					"\"$(SRCROOT)/../../../MoltenVK/include\"",
-					"\"$(SRCROOT)/../VulkanSamples/include\"",
+					"\"$(SRCROOT)/../Vulkan-LoaderAndValidationLayers/include\"",
 				);
 				OTHER_LDFLAGS = "-ObjC";
 				PRODUCT_BUNDLE_IDENTIFIER = "com.moltenvk.${PRODUCT_NAME:identifier}";

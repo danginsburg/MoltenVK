@@ -555,22 +555,41 @@ void MVKCmdCopyBuffer::setContent(VkBuffer srcBuffer,
 }
 
 void MVKCmdCopyBuffer::encode(MVKCommandEncoder* cmdEncoder) {
+	id<MTLBuffer> srcMTLBuff = _srcBuffer->getMTLBuffer();
+	NSUInteger srcMTLBuffOffset = _srcBuffer->getMTLBufferOffset();
 
-    id<MTLBlitCommandEncoder> mtlBlitEnc = cmdEncoder->getMTLBlitEncoder(kMVKCommandUseCopyBuffer);
+	id<MTLBuffer> dstMTLBuff = _dstBuffer->getMTLBuffer();
+	NSUInteger dstMTLBuffOffset = _dstBuffer->getMTLBufferOffset();
 
-    id<MTLBuffer> srcMTLBuff = _srcBuffer->getMTLBuffer();
-    NSUInteger srcMTLBuffOffset = _srcBuffer->getMTLBufferOffset();
+	VkDeviceSize buffAlign = getDevice()->_pMetalFeatures->mtlCopyBufferAlignment;
 
-    id<MTLBuffer> dstMTLBuff = _dstBuffer->getMTLBuffer();
-    NSUInteger dstMTLBuffOffset = _dstBuffer->getMTLBufferOffset();
+	for (auto& cpyRgn : _mtlBuffCopyRegions) {
+		const bool useComputeCopy = buffAlign > 1 && (cpyRgn.srcOffset % buffAlign != 0 ||
+													  cpyRgn.dstOffset % buffAlign != 0 ||
+													  cpyRgn.size      % buffAlign != 0);
+		if (useComputeCopy) {
+			MVKAssert(cpyRgn.srcOffset <= UINT32_MAX || cpyRgn.dstOffset <= UINT32_MAX || cpyRgn.size <= UINT32_MAX,
+					  "Compute buffer copy region offsets and size must fit into a 32-bit unsigned integer.");
 
-    for (auto& cpyRgn : _mtlBuffCopyRegions) {
-        [mtlBlitEnc copyFromBuffer: srcMTLBuff
-                      sourceOffset: (srcMTLBuffOffset + cpyRgn.srcOffset)
-                          toBuffer: dstMTLBuff
-                 destinationOffset: (dstMTLBuffOffset + cpyRgn.dstOffset)
-                              size: cpyRgn.size];
-    }
+			id<MTLComputeCommandEncoder> mtlComputeEnc = cmdEncoder->getMTLComputeEncoder(kMVKCommandUseCopyBuffer);
+			[mtlComputeEnc pushDebugGroup: @"vkCmdCopyBuffer"];
+			id<MTLComputePipelineState> pipelineState = cmdEncoder->getCommandEncodingPool()->getCopyBufferBytesComputePipelineState();
+			[mtlComputeEnc setComputePipelineState:pipelineState];
+			[mtlComputeEnc setBuffer:srcMTLBuff offset:srcMTLBuffOffset atIndex:0];
+			[mtlComputeEnc setBuffer:dstMTLBuff offset:dstMTLBuffOffset atIndex:1];
+			uint32_t copyInfo[3] = { (uint32_t)cpyRgn.srcOffset,  (uint32_t)cpyRgn.dstOffset, (uint32_t)cpyRgn.size };
+			[mtlComputeEnc setBytes:copyInfo length:sizeof(copyInfo) atIndex:2];
+			[mtlComputeEnc dispatchThreads: MTLSizeMake(1, 1, 1) threadsPerThreadgroup: MTLSizeMake(1, 1, 1)];
+			[mtlComputeEnc popDebugGroup];
+		} else {
+			id<MTLBlitCommandEncoder> mtlBlitEnc = cmdEncoder->getMTLBlitEncoder(kMVKCommandUseCopyBuffer);
+			[mtlBlitEnc copyFromBuffer: srcMTLBuff
+						  sourceOffset: (srcMTLBuffOffset + cpyRgn.srcOffset)
+							  toBuffer: dstMTLBuff
+					 destinationOffset: (dstMTLBuffOffset + cpyRgn.dstOffset)
+								  size: cpyRgn.size];
+		}
+	}
 }
 
 MVKCmdCopyBuffer::MVKCmdCopyBuffer(MVKCommandTypePool<MVKCmdCopyBuffer>* pool)
@@ -611,6 +630,7 @@ void MVKCmdBufferImageCopy::encode(MVKCommandEncoder* cmdEncoder) {
     id<MTLTexture> mtlTexture = _image->getMTLTexture();
     if ( !mtlBuffer || !mtlTexture ) { return; }
 
+	NSUInteger mtlBuffOffset = _buffer->getMTLBufferOffset();
     MTLPixelFormat mtlPixFmt = mtlTexture.pixelFormat;
     MVKCommandUse cmdUse = _toImage ? kMVKCommandUseCopyBufferToImage : kMVKCommandUseCopyImageToBuffer;
     id<MTLBlitCommandEncoder> mtlBlitEnc = cmdEncoder->getMTLBlitEncoder(cmdUse);
@@ -652,7 +672,7 @@ void MVKCmdBufferImageCopy::encode(MVKCommandEncoder* cmdEncoder) {
         for (uint32_t lyrIdx = 0; lyrIdx < cpyRgn.imageSubresource.layerCount; lyrIdx++) {
             if (_toImage) {
                 [mtlBlitEnc copyFromBuffer: mtlBuffer
-                              sourceOffset: (cpyRgn.bufferOffset + (bytesPerImg * lyrIdx))
+                              sourceOffset: (mtlBuffOffset + cpyRgn.bufferOffset + (bytesPerImg * lyrIdx))
                          sourceBytesPerRow: bytesPerRow
                        sourceBytesPerImage: bytesPerImg
                                 sourceSize: mtlTxtSize
@@ -668,7 +688,7 @@ void MVKCmdBufferImageCopy::encode(MVKCommandEncoder* cmdEncoder) {
                                sourceOrigin: mtlTxtOrigin
                                  sourceSize: mtlTxtSize
                                    toBuffer: mtlBuffer
-                          destinationOffset: (cpyRgn.bufferOffset + (bytesPerImg * lyrIdx))
+                          destinationOffset: (mtlBuffOffset + cpyRgn.bufferOffset + (bytesPerImg * lyrIdx))
                      destinationBytesPerRow: bytesPerRow
                    destinationBytesPerImage: bytesPerImg
                                     options: blitOptions];
@@ -688,7 +708,7 @@ void MVKCmdClearAttachments::setContent(uint32_t attachmentCount,
                                         const VkClearAttachment* pAttachments,
                                         uint32_t rectCount,
                                         const VkClearRect* pRects) {
-    _rpsKey.reset();
+    _rpsKey = kMVKRPSKeyClearAttDefault;
     _mtlStencilValue = 0;
     _isClearingDepth = false;
     _isClearingStencil = false;
@@ -794,11 +814,11 @@ void MVKCmdClearAttachments::encode(MVKCommandEncoder* cmdEncoder) {
     VkExtent2D fbExtent = cmdEncoder->_framebuffer->getExtent2D();
     populateVertices(fbExtent.width, fbExtent.height);
     uint32_t vtxCnt = (uint32_t)_vertices.size();
-
     uint32_t vtxBuffIdx = getDevice()->getMetalBufferIndexForVertexAttributeBinding(kMVKVertexContentBufferIndex);
 
-    // Populate the render pipeline state attachment key with
-    // the format of each color attachment used by the subpass
+    // Populate the render pipeline state attachment key with attachment info from the subpass.
+	_rpsKey.mtlSampleCount = mvkSampleCountFromVkSampleCountFlagBits(subpass->getSampleCount());
+
     uint32_t caCnt = subpass->getColorAttachmentCount();
     for (uint32_t caIdx = 0; caIdx < caCnt; caIdx++) {
         VkFormat vkAttFmt = subpass->getColorAttachmentFormat(caIdx);
@@ -808,13 +828,16 @@ void MVKCmdClearAttachments::encode(MVKCommandEncoder* cmdEncoder) {
     }
 
     VkFormat vkAttFmt = subpass->getDepthStencilFormat();
-    _rpsKey.attachmentMTLPixelFormats[kMVKAttachmentFormatDepthStencilIndex] = cmdPool->mtlPixelFormatFromVkFormat(vkAttFmt);
+	MTLPixelFormat mtlAttFmt = cmdPool->mtlPixelFormatFromVkFormat(vkAttFmt);
+    _rpsKey.attachmentMTLPixelFormats[kMVKAttachmentFormatDepthStencilIndex] = mtlAttFmt;
+	bool isClearingDepth = _isClearingDepth && mvkMTLPixelFormatIsDepthFormat(mtlAttFmt);
+	bool isClearingStencil = _isClearingStencil && mvkMTLPixelFormatIsStencilFormat(mtlAttFmt);
 
     // Render the clear colors to the attachments
     id<MTLRenderCommandEncoder> mtlRendEnc = cmdEncoder->_mtlRenderEncoder;
     [mtlRendEnc pushDebugGroup: @"vkCmdClearAttachments"];
     [mtlRendEnc setRenderPipelineState: cmdEncoder->getCommandEncodingPool()->getCmdClearMTLRenderPipelineState(_rpsKey)];
-    [mtlRendEnc setDepthStencilState: cmdEncoder->getCommandEncodingPool()->getMTLDepthStencilState(_isClearingDepth, _isClearingStencil)];
+    [mtlRendEnc setDepthStencilState: cmdEncoder->getCommandEncodingPool()->getMTLDepthStencilState(isClearingDepth, isClearingStencil)];
     [mtlRendEnc setStencilReferenceValue: _mtlStencilValue];
 
     cmdEncoder->setVertexBytes(mtlRendEnc, _clearColors, sizeof(_clearColors), 0);
@@ -845,9 +868,10 @@ void MVKCmdClearImage::setContent(VkImage image,
     _image = (MVKImage*)image;
     _imgLayout = imageLayout;
     _isDepthStencilClear = isDepthStencilClear;
+	_mtlStencilValue = 0;
 
-    _rpsKey.reset();
-    _mtlStencilValue = 0;
+	_rpsKey = kMVKRPSKeyClearAttDefault;
+	_rpsKey.mtlSampleCount = _image->getSampleCount();
 
     if (_isDepthStencilClear) {
         _rpsKey.enable(kMVKAttachmentFormatDepthStencilIndex);

@@ -28,8 +28,17 @@
 
 #pragma mark Math
 
-/** Maximum value of any variable of unsigned integral type. */
-#define kMVKMaxUnsigned		(~0U)
+/**
+ * The following constants are used to indicate values that have no defined limit.
+ * They are ridiculously large numbers, but low enough to be safely used as both
+ * uint and int values without risking overflowing between positive and negative values.
+ */
+static int32_t kMVKUndefinedLargeNegativeInt32 = std::numeric_limits<int32_t>::min() / 2;
+static int32_t kMVKUndefinedLargePositiveInt32 = std::numeric_limits<int32_t>::max() / 2;
+static uint32_t kMVKUndefinedLargeUInt32 = kMVKUndefinedLargePositiveInt32;
+static int64_t kMVKUndefinedLargeNegativeInt64 = std::numeric_limits<int64_t>::min() / 2;
+static int64_t kMVKUndefinedLargePositiveInt64 = std::numeric_limits<int64_t>::max() / 2;
+static uint64_t kMVKUndefinedLargeUInt64 = kMVKUndefinedLargePositiveInt64;
 
 // Common scaling multipliers
 #define KIBI		(1024)
@@ -88,6 +97,7 @@ typedef enum {
     kMVKCommandUseClearColorImage,          /**< vkCmdClearColorImage. */
     kMVKCommandUseClearDepthStencilImage,   /**< vkCmdClearDepthStencilImage. */
     kMVKCommandUseResetQueryPool,           /**< vkCmdResetQueryPool. */
+	kMVKCommandUseDispatch,                 /**< vkCmdDispatch. */
 } MVKCommandUse;
 
 /**
@@ -103,11 +113,17 @@ char* mvkResultName(VkResult vkResult, char* name);
  *
  * - Logs the error code and message to the console
  */
-VkResult mvkNotifyErrorWithText(VkResult vkErr, const char* errFmt, ...);
+VkResult mvkNotifyErrorWithText(VkResult vkErr, const char* errFmt, ...) __printflike(2, 3);
 
 
 #pragma mark -
 #pragma mark Alignment functions
+
+/** Returns the result of an unsigned integer division, rounded up. */
+static inline size_t mvkCeilingDivide(size_t numerator, size_t denominator) {
+	if (denominator == 1) { return numerator; }		// Short circuit for this very common usecase.
+	return (numerator + denominator - 1) / denominator;
+}
 
 /** Returns whether the specified value is a power-of-two. */
 static inline bool mvkIsPowerOfTwo(uintptr_t value) {
@@ -248,7 +264,7 @@ const T& mvkClamp(const T& val, const T& lower, const T& upper) {
  * value returned by previous calls as the seed in subsequent calls.
  */
 template<class N>
-std::size_t mvkHash(const N* pVals, std::size_t count, std::size_t seed = 5381) {
+std::size_t mvkHash(const N* pVals, std::size_t count = 1, std::size_t seed = 5381) {
     std::size_t hash = seed;
     for (std::size_t i = 0; i < count; i++) { hash = ((hash << 5) + hash) ^ pVals[i]; }
     return hash;
@@ -266,7 +282,7 @@ void mvkEnsureSize(C& container, S size) {
  */
 template<typename C>
 void mvkDestroyContainerContents(C& container) {
-    for (auto elem : container) { delete elem; }
+    for (auto elem : container) { elem->destroy(); }
     container.clear();
 }
 
