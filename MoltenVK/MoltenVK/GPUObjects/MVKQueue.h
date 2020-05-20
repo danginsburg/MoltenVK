@@ -229,5 +229,6 @@ protected:
 	id<MTLCommandBuffer> getMTLCommandBuffer();
 
 	MVKVectorInline<MVKPresentableSwapchainImage*, 4> _presentableImages;
+	MVKVectorInline<uint64_t, 4> _presentTimesGOOGLE;
 };
 
