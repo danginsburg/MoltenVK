@@ -339,10 +339,9 @@ void MVKQueuePresentSurfaceSubmission::execute() {
 	// The semaphores know what to do.
 	id<MTLCommandBuffer> mtlCmdBuff = getMTLCommandBuffer();
 	for (auto& ws : _waitSemaphores) { ws->encodeWait(mtlCmdBuff); }
-	bool hasPresentTime = (_presentTimesGOOGLE.size() > 0) && (_presentTimesGOOGLE.size() == _presentableImages.size());
-	for (int i = 0; i < _presentableImages.size(); i++ ) {
-		MVKPresentableSwapchainImage *img = _presentableImages[i];
-		img->presentCAMetalDrawable(mtlCmdBuff, hasPresentTime, hasPresentTime ? _presentTimesGOOGLE[i] : 0 );
+	for (int i = 0; i < _presentInfo.size(); i++ ) {
+		MVKPresentableSwapchainImage *img = _presentInfo[i].presentableImage;
+		img->presentCAMetalDrawable(mtlCmdBuff, _presentInfo[i].hasPresentTime, _presentInfo[i].presentID, _presentInfo[i].desiredPresentTime);
 	}
 	for (auto& ws : _waitSemaphores) { ws->encodeWait(nil); }
 	[mtlCmdBuff commit];
@@ -387,13 +386,19 @@ MVKQueuePresentSurfaceSubmission::MVKQueuePresentSurfaceSubmission(MVKQueue* que
 		MVKAssert( pPresentTimesInfoGOOGLE->swapchainCount == pPresentInfo->swapchainCount, "VkPresentTimesInfoGOOGLE swapchainCount must match VkPresentInfo swapchainCount" );
 	}
 	VkResult* pSCRslts = pPresentInfo->pResults;
-	_presentableImages.reserve(scCnt);
+	_presentInfo.reserve(scCnt);
 	for (uint32_t scIdx = 0; scIdx < scCnt; scIdx++) {
 		MVKSwapchain* mvkSC = (MVKSwapchain*)pPresentInfo->pSwapchains[scIdx];
-		_presentableImages.push_back(mvkSC->getPresentableImage(pPresentInfo->pImageIndices[scIdx]));
+		PresentInfo presentInfo = {};
+		presentInfo.presentableImage = mvkSC->getPresentableImage(pPresentInfo->pImageIndices[scIdx]);
 		if ( pPresentTimesGOOGLE ) {
-			_presentTimesGOOGLE.push_back(pPresentTimesGOOGLE[scIdx].desiredPresentTime);
+			presentInfo.hasPresentTime = true;
+			presentInfo.presentID = pPresentTimesGOOGLE[scIdx].presentID;
+			presentInfo.desiredPresentTime = pPresentTimesGOOGLE[scIdx].desiredPresentTime;
+		} else {
+			presentInfo.hasPresentTime = false;
 		}
+		_presentInfo.push_back(presentInfo);
 		VkResult scRslt = mvkSC->getSurfaceStatus();
 		if (pSCRslts) { pSCRslts[scIdx] = scRslt; }
 		setConfigurationResult(scRslt);

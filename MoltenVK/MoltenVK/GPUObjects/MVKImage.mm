@@ -967,7 +967,7 @@ id<CAMetalDrawable> MVKPresentableSwapchainImage::getCAMetalDrawable() {
 }
 
 // Present the drawable and make myself available only once the command buffer has completed.
-void MVKPresentableSwapchainImage::presentCAMetalDrawable(id<MTLCommandBuffer> mtlCmdBuff, bool hasPresentTime, uint64_t desiredPresentTime) {
+void MVKPresentableSwapchainImage::presentCAMetalDrawable(id<MTLCommandBuffer> mtlCmdBuff, bool hasPresentTime, uint32_t presentID, uint64_t desiredPresentTime) {
 	_swapchain->willPresentSurface(getMTLTexture(), mtlCmdBuff);
 
 	NSString* scName = _swapchain->getDebugName();
@@ -976,7 +976,7 @@ void MVKPresentableSwapchainImage::presentCAMetalDrawable(id<MTLCommandBuffer> m
 		[mtlCmdBuff presentDrawable: getCAMetalDrawable()];
 	}
 	else {
-		// Convert from nsec (mach_absolute_time) to seconds
+		// Convert from nsecs to seconds
 		CFTimeInterval presentTimeSeconds = ( double ) desiredPresentTime * 1.0e-9;
 		[mtlCmdBuff presentDrawable: getCAMetalDrawable() atTime:(CFTimeInterval)presentTimeSeconds];
 	}
@@ -989,6 +989,16 @@ void MVKPresentableSwapchainImage::presentCAMetalDrawable(id<MTLCommandBuffer> m
 		makeAvailable();
 		release();
 	}];
+	
+	if (hasPresentTime) {
+		[_mtlDrawable addPresentedHandler: ^(id<MTLDrawable> drawable) {
+			// Record the presentation time
+			CFTimeInterval presentedTimeSeconds = drawable.presentedTime;
+			uint64_t presentedTimeNanoseconds = (uint64_t)(presentedTimeSeconds * 1.0e9);
+			_swapchain->recordPresentTime(presentID, desiredPresentTime, presentedTimeNanoseconds);
+		}];
+
+	}
 }
 
 // Resets the MTLTexture and CAMetalDrawable underlying this image.
